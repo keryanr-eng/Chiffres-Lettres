@@ -67,11 +67,20 @@ alter table game_players enable row level security;
 alter table rounds enable row level security;
 alter table attempts enable row level security;
 
-create policy if not exists "players_rw" on players for all using (true) with check (true);
-create policy if not exists "games_rw" on games for all using (true) with check (true);
-create policy if not exists "game_players_rw" on game_players for all using (true) with check (true);
-create policy if not exists "rounds_read" on rounds for select using (true);
-create policy if not exists "attempts_read" on attempts for select using (true);
+drop policy if exists "players_rw" on players;
+create policy "players_rw" on players for all using (true) with check (true);
+
+drop policy if exists "games_rw" on games;
+create policy "games_rw" on games for all using (true) with check (true);
+
+drop policy if exists "game_players_rw" on game_players;
+create policy "game_players_rw" on game_players for all using (true) with check (true);
+
+drop policy if exists "rounds_read" on rounds;
+create policy "rounds_read" on rounds for select using (true);
+
+drop policy if exists "attempts_read" on attempts;
+create policy "attempts_read" on attempts for select using (true);
 
 create or replace function gen_game_code()
 returns text language plpgsql as $$
