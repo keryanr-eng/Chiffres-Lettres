@@ -30,6 +30,7 @@ export function GamePage() {
 
   const myAttempt = attempts.find((a) => a.round_id === rounds[currentRoundIndex]?.id);
   const round = rounds[currentRoundIndex];
+  const roundTitle = `Manche ${currentRoundIndex + 1}/9 — ${round?.round_type === 'numbers' ? 'Chiffres' : 'Lettres'}`;
 
   const refresh = async () => {
     if (!profile) return;
@@ -77,7 +78,11 @@ export function GamePage() {
   }, [myAttempt?.deadline_at]);
 
   const canStart = myAttempt?.status === 'pending';
-  const canSubmit = myAttempt?.status === 'started' && clock > 0;
+  const isStarted = myAttempt?.status === 'started';
+  const isFinished = myAttempt?.status === 'submitted' || myAttempt?.status === 'expired';
+  const isTimeUpWithoutSubmit = isStarted && clock === 0;
+  const canSubmit = isStarted && clock > 0;
+  const inputDisabled = !isStarted || clock === 0;
 
   const letterCheck = useMemo(() => {
     if (round?.round_type !== 'letters') return '';
@@ -100,13 +105,23 @@ export function GamePage() {
   };
 
   const onSubmit = async () => {
-    if (!myAttempt || !round) return;
+    if (!myAttempt || !round || !isStarted) return;
     if (round.round_type === 'letters') {
       await submitLetters(myAttempt.id, word);
       setWord('');
     } else {
       await submitNumbers(myAttempt.id, expr);
       setExpr('');
+    }
+    await refresh();
+  };
+
+  const onPass = async () => {
+    if (!myAttempt || !round || !isTimeUpWithoutSubmit) return;
+    if (round.round_type === 'letters') {
+      await submitLetters(myAttempt.id, '');
+    } else {
+      await submitNumbers(myAttempt.id, '');
     }
     await refresh();
   };
@@ -127,33 +142,25 @@ export function GamePage() {
         <p className="text-3xl font-black tracking-widest">{gameCode || '...'}</p>
       </section>
 
-      <section className="card flex justify-between">
-        <div>
-          <p className="text-xs text-slate-400">Manche</p>
-          <p className="text-lg font-bold">{currentRoundIndex + 1} / 9</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-400">Type</p>
-          <p className="text-lg font-bold capitalize">{round?.round_type ?? '-'}</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-400">Temps restant</p>
+      <section className="card flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-bold text-lg">{roundTitle}</h2>
           <p className="text-lg font-bold text-brand-500">{clock}s</p>
         </div>
-      </section>
 
-      <section className="card flex flex-col gap-3">
-        <h2 className="font-bold">1) Prêt ?</h2>
-        <p className="text-sm text-slate-300">Le tirage est caché jusqu’au clic sur Démarrer.</p>
-        {canStart ? <button className="btn-primary" onClick={onStartRound}>Démarrer la manche</button> : null}
+        {canStart ? <button className="btn-primary" onClick={onStartRound}>Démarrer</button> : null}
 
-        {myAttempt?.status === 'started' ? (
+        {myAttempt && myAttempt.status !== 'pending' ? (
           <>
-            <h3 className="font-bold">2) Tirage</h3>
             {round?.round_type === 'letters' ? (
-              <div className="flex gap-2 flex-wrap">
+              <div className="flex gap-2 overflow-x-auto flex-nowrap pb-1">
                 {round.payload.letters?.map((letter, idx) => (
-                  <span key={`${letter}-${idx}`} className="rounded-lg bg-slate-800 px-3 py-2 text-xl font-black uppercase">{letter}</span>
+                  <span
+                    key={`${letter}-${idx}`}
+                    className="flex-none rounded-lg bg-slate-800 px-3 py-2 text-xl font-black uppercase"
+                  >
+                    {letter}
+                  </span>
                 ))}
               </div>
             ) : (
@@ -169,17 +176,37 @@ export function GamePage() {
 
             {round?.round_type === 'letters' ? (
               <>
-                <input className="rounded-xl bg-slate-800 border border-slate-700 px-3 py-3" value={word} onChange={(e) => setWord(e.target.value)} placeholder="Ton mot" />
-                {letterCheck ? <p className="text-xs">{letterCheck}</p> : null}
+                <input
+                  className="rounded-xl bg-slate-800 border border-slate-700 px-3 py-3 disabled:opacity-60"
+                  value={word}
+                  onChange={(e) => setWord(e.target.value)}
+                  placeholder="Ton mot"
+                  disabled={inputDisabled}
+                />
+                {isStarted && clock > 0 && letterCheck ? <p className="text-xs">{letterCheck}</p> : null}
               </>
             ) : (
-              <input className="rounded-xl bg-slate-800 border border-slate-700 px-3 py-3" value={expr} onChange={(e) => setExpr(e.target.value)} placeholder="Ex: (100+7)*5" />
+              <input
+                className="rounded-xl bg-slate-800 border border-slate-700 px-3 py-3 disabled:opacity-60"
+                value={expr}
+                onChange={(e) => setExpr(e.target.value)}
+                placeholder="Ex: (100+7)*5"
+                disabled={inputDisabled}
+              />
             )}
-            <button className="btn-primary" disabled={!canSubmit} onClick={onSubmit}>Soumettre</button>
+
+            <button className="btn-primary" disabled={!canSubmit || isFinished} onClick={onSubmit}>Soumettre</button>
           </>
         ) : null}
 
-        {myAttempt?.status === 'submitted' || myAttempt?.status === 'expired' ? (
+        {isTimeUpWithoutSubmit ? (
+          <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
+            <p className="text-amber-300 font-semibold">Temps écoulé — en attente de l'adversaire</p>
+            <button className="btn-secondary mt-3 w-full" onClick={onPass}>Passer</button>
+          </div>
+        ) : null}
+
+        {isFinished ? (
           <p className="text-emerald-400">Manche terminée. Attends l’autre joueur pour débloquer la suite.</p>
         ) : null}
       </section>

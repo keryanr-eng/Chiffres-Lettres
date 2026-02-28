@@ -100,21 +100,84 @@ begin
 end;
 $$;
 
+create or replace function can_build_word_from_letters(p_letters text[], p_word text)
+returns boolean language plpgsql as $$
+declare
+  pool text[] := p_letters;
+  ch text;
+  i int;
+begin
+  for i in 1..char_length(p_word) loop
+    ch := substr(p_word, i, 1);
+    if not (ch = any(pool)) then
+      return false;
+    end if;
+    pool := array_remove(pool, ch);
+  end loop;
+  return true;
+end;
+$$;
+
 create or replace function gen_letters_payload()
 returns jsonb language plpgsql as $$
 declare
-  vowels text[] := array['a','e','i','o','u','y'];
-  consonants text[] := array['b','c','d','f','g','h','j','k','l','m','n','p','q','r','s','t','v','w','x','z'];
+  vowels text[] := array[
+    'e','e','e','e','e','e','e','e','e','a','a','a','a','a','a','i','i','i','i','i',
+    'o','o','o','o','u','u','u','y'
+  ];
+  consonants text[] := array[
+    's','s','s','n','n','n','r','r','r','t','t','t','l','l','l','d','d','c','c','m','m',
+    'p','p','v','v','g','g','b','b','f','f','h','j','q','k','w','x','z'
+  ];
+  words text[] := array[
+    'ami','amie','arbre','avion','banane','bateau','beau','belle','bonjour','bureau','cabane','cahier','carte',
+    'chat','chien','classe','clavier','code','complet','cuisine','danse','debut','ecole','ecrire','eleve','etoile',
+    'famille','fenetre','fleur','fromage','garage','guitare','heureux','histoire','image','joueur','journal','lampe',
+    'lettre','livre','maison','manger','marine','matin','mercredi','mobile','montagne','musique','nombre','nuage',
+    'orange','ordinateur','pantalon','papier','parler','partie','piano','plage','poisson','portable','pratique',
+    'question','rapide','reponse','route','saison','salade','science','soleil','stylo','tableau','telephone','temps',
+    'tortue','train','valise','velo','voyage','voiture','zebre'
+  ];
+  try_count int := 50;
+  attempt int;
   i int;
-  out_letters text[] := '{}';
+  vowel_count int;
+  candidate text[];
+  best_letters text[] := '{}';
+  score int;
+  best_score int := -1;
+  w text;
 begin
-  for i in 1..4 loop
-    out_letters := out_letters || vowels[1 + floor(random() * array_length(vowels,1))::int];
+  for attempt in 1..try_count loop
+    candidate := '{}';
+    vowel_count := 3 + floor(random() * 3)::int;
+
+    for i in 1..vowel_count loop
+      candidate := candidate || vowels[1 + floor(random() * array_length(vowels,1))::int];
+    end loop;
+
+    for i in 1..(9 - vowel_count) loop
+      candidate := candidate || consonants[1 + floor(random() * array_length(consonants,1))::int];
+    end loop;
+
+    score := 0;
+    foreach w in array words loop
+      if can_build_word_from_letters(candidate, w) then
+        score := greatest(score, char_length(w));
+      end if;
+    end loop;
+
+    if score > best_score then
+      best_score := score;
+      best_letters := candidate;
+    end if;
+
+    if score >= 2 then
+      exit;
+    end if;
   end loop;
-  for i in 1..5 loop
-    out_letters := out_letters || consonants[1 + floor(random() * array_length(consonants,1))::int];
-  end loop;
-  return jsonb_build_object('letters', out_letters);
+
+  return jsonb_build_object('letters', best_letters);
 end;
 $$;
 
