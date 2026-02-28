@@ -8,12 +8,16 @@ import { supabase } from '../lib/supabase';
 import type { AttemptRow, RoundRow } from '../types';
 
 type CalcTile = { id: string; value: number };
+type CalcStep = 'pick_first' | 'pick_operation' | 'pick_second';
+type CalcOp = '+' | '-' | '*' | '/';
 type CalcSnapshot = {
   tiles: CalcTile[];
   history: string[];
   trace: string;
-  selectedIds: string[];
   finalValue: number | null;
+  step: CalcStep;
+  firstTileId: string | null;
+  operation: CalcOp | null;
 };
 
 const dictionary = new Set(FRENCH_WORDS.map((word) => normalizeWord(word)));
@@ -26,7 +30,7 @@ const secondsLeft = (deadline: string | null) => {
 const initCalcTiles = (numbers: number[] = []) =>
   numbers.map((value, idx) => ({ id: `${idx}-${value}`, value }));
 
-const applyOperation = (a: number, b: number, op: '+' | '-' | '*' | '/') => {
+const applyOperation = (a: number, b: number, op: CalcOp) => {
   if (op === '+') return { ok: true, value: a + b } as const;
   if (op === '-') return { ok: true, value: a - b } as const;
   if (op === '*') return { ok: true, value: a * b } as const;
@@ -48,12 +52,14 @@ export function GamePage() {
   const [allAttempts, setAllAttempts] = useState<AttemptRow[]>([]);
 
   const [calcTiles, setCalcTiles] = useState<CalcTile[]>([]);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [calcHistory, setCalcHistory] = useState<string[]>([]);
   const [calcTrace, setCalcTrace] = useState('');
   const [calcUndoStack, setCalcUndoStack] = useState<CalcSnapshot[]>([]);
   const [calcFinalValue, setCalcFinalValue] = useState<number | null>(null);
   const [calcError, setCalcError] = useState('');
+  const [calcStep, setCalcStep] = useState<CalcStep>('pick_first');
+  const [firstTileId, setFirstTileId] = useState<string | null>(null);
+  const [operation, setOperation] = useState<CalcOp | null>(null);
 
   const myAttempt = attempts.find((a) => a.round_id === rounds[currentRoundIndex]?.id);
   const round = rounds[currentRoundIndex];
@@ -130,12 +136,14 @@ export function GamePage() {
   useEffect(() => {
     if (round?.round_type !== 'numbers') return;
     setCalcTiles(initCalcTiles(round.payload.numbers));
-    setSelectedIds([]);
     setCalcHistory([]);
     setCalcTrace('');
     setCalcUndoStack([]);
     setCalcFinalValue(null);
     setCalcError('');
+    setCalcStep('pick_first');
+    setFirstTileId(null);
+    setOperation(null);
   }, [round?.id, round?.round_type, round?.payload.numbers]);
 
   const letterCheck = useMemo(() => {
@@ -179,59 +187,85 @@ export function GamePage() {
     await refresh();
   };
 
-  const toggleTile = (tileId: string) => {
-    if (inputDisabled || round?.round_type !== 'numbers') return;
-    setCalcError('');
-    setSelectedIds((prev) => {
-      if (prev.includes(tileId)) return prev.filter((id) => id !== tileId);
-      if (prev.length >= 2) return prev;
-      return [...prev, tileId];
-    });
-  };
-
   const clearSelection = () => {
-    setSelectedIds([]);
+    setCalcStep('pick_first');
+    setFirstTileId(null);
+    setOperation(null);
     setCalcError('');
   };
 
-  const applyCalcOp = (op: '+' | '-' | '*' | '/') => {
-    if (inputDisabled || round?.round_type !== 'numbers' || selectedIds.length !== 2) return;
-    const aTile = calcTiles.find((tile) => tile.id === selectedIds[0]);
-    const bTile = calcTiles.find((tile) => tile.id === selectedIds[1]);
-    if (!aTile || !bTile) return;
+  const selectOperation = (op: CalcOp) => {
+    if (inputDisabled || round?.round_type !== 'numbers') return;
+    if (calcStep !== 'pick_operation') return;
+    setOperation(op);
+    setCalcStep('pick_second');
+    setCalcError('');
+  };
 
-    const result = applyOperation(aTile.value, bTile.value, op);
-    if (!result.ok) {
-      setCalcError('Division non entière interdite.');
+  const onTileClick = (tileId: string) => {
+    if (inputDisabled || round?.round_type !== 'numbers') return;
+
+    if (calcStep === 'pick_first') {
+      setFirstTileId(tileId);
+      setCalcStep('pick_operation');
+      setOperation(null);
+      setCalcError('');
       return;
     }
 
-    const opLabel = op === '*' ? '×' : op === '/' ? '÷' : op;
-    const step = `${aTile.value} ${opLabel} ${bTile.value} = ${result.value}`;
-    const snapshot: CalcSnapshot = {
-      tiles: calcTiles,
-      history: calcHistory,
-      trace: calcTrace,
-      selectedIds,
-      finalValue: calcFinalValue,
-    };
+    if (calcStep === 'pick_operation') {
+      if (tileId === firstTileId) {
+        setCalcStep('pick_first');
+        setFirstTileId(null);
+      } else {
+        setFirstTileId(tileId);
+      }
+      setCalcError('');
+      return;
+    }
 
-    const remaining = calcTiles.filter((tile) => tile.id !== aTile.id && tile.id !== bTile.id);
-    const newTile: CalcTile = {
-      id: `r-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      value: result.value,
-    };
+    if (calcStep === 'pick_second') {
+      if (!firstTileId || !operation || firstTileId === tileId) return;
+      const aTile = calcTiles.find((tile) => tile.id === firstTileId);
+      const bTile = calcTiles.find((tile) => tile.id === tileId);
+      if (!aTile || !bTile) return;
 
-    const nextTiles = [...remaining, newTile];
-    const nextHistory = [...calcHistory, step];
+      const result = applyOperation(aTile.value, bTile.value, operation);
+      if (!result.ok) {
+        setCalcError('Division non entière interdite.');
+        setCalcStep('pick_operation');
+        return;
+      }
 
-    setCalcUndoStack((prev) => [...prev, snapshot]);
-    setCalcTiles(nextTiles);
-    setCalcHistory(nextHistory);
-    setCalcTrace(nextHistory.join(' | '));
-    setCalcFinalValue(result.value);
-    setSelectedIds([]);
-    setCalcError('');
+      const snapshot: CalcSnapshot = {
+        tiles: calcTiles,
+        history: calcHistory,
+        trace: calcTrace,
+        finalValue: calcFinalValue,
+        step: calcStep,
+        firstTileId,
+        operation,
+      };
+
+      const opLabel = operation === '*' ? '×' : operation === '/' ? '÷' : operation;
+      const stepText = `${aTile.value} ${opLabel} ${bTile.value} = ${result.value}`;
+      const remaining = calcTiles.filter((tile) => tile.id !== aTile.id && tile.id !== bTile.id);
+      const newTile: CalcTile = {
+        id: `r-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        value: result.value,
+      };
+      const nextHistory = [...calcHistory, stepText];
+
+      setCalcUndoStack((prev) => [...prev, snapshot]);
+      setCalcTiles([...remaining, newTile]);
+      setCalcHistory(nextHistory);
+      setCalcTrace(nextHistory.join(' | '));
+      setCalcFinalValue(result.value);
+      setCalcStep('pick_first');
+      setFirstTileId(null);
+      setOperation(null);
+      setCalcError('');
+    }
   };
 
   const undoLast = () => {
@@ -241,20 +275,24 @@ export function GamePage() {
     setCalcTiles(previous.tiles);
     setCalcHistory(previous.history);
     setCalcTrace(previous.trace);
-    setSelectedIds(previous.selectedIds);
     setCalcFinalValue(previous.finalValue);
+    setCalcStep('pick_first');
+    setFirstTileId(null);
+    setOperation(null);
     setCalcError('');
   };
 
   const restartCalc = () => {
     if (round?.round_type !== 'numbers') return;
     setCalcTiles(initCalcTiles(round.payload.numbers));
-    setSelectedIds([]);
     setCalcHistory([]);
     setCalcTrace('');
     setCalcUndoStack([]);
     setCalcFinalValue(null);
     setCalcError('');
+    setCalcStep('pick_first');
+    setFirstTileId(null);
+    setOperation(null);
   };
 
   if (!profile) {
@@ -296,20 +334,26 @@ export function GamePage() {
                   <p className="text-2xl font-black">{target}</p>
                 </div>
 
+                <p className="text-xs text-slate-400">
+                  {calcStep === 'pick_first' ? 'Étape 1/3 : sélectionne le 1er nombre.' : null}
+                  {calcStep === 'pick_operation' ? 'Étape 2/3 : choisis une opération.' : null}
+                  {calcStep === 'pick_second' ? 'Étape 3/3 : sélectionne le 2e nombre.' : null}
+                </p>
+
                 <div className="grid grid-cols-3 gap-2">
                   {calcTiles.map((tile) => {
-                    const active = selectedIds.includes(tile.id);
-                    const full = selectedIds.length === 2 && !active;
+                    const isFirst = firstTileId === tile.id;
+                    const disabledInStepC = calcStep === 'pick_second' && isFirst;
                     return (
                       <button
                         key={tile.id}
                         className={`rounded-lg px-3 py-3 text-lg font-black border transition ${
-                          active
+                          isFirst
                             ? 'bg-brand-500 text-slate-950 border-brand-500'
                             : 'bg-slate-800 border-slate-700'
-                        } ${full ? 'opacity-60' : ''}`}
-                        onClick={() => toggleTile(tile.id)}
-                        disabled={inputDisabled || full}
+                        } ${disabledInStepC ? 'opacity-50' : ''}`}
+                        onClick={() => onTileClick(tile.id)}
+                        disabled={inputDisabled || disabledInStepC}
                       >
                         {tile.value}
                       </button>
@@ -318,16 +362,19 @@ export function GamePage() {
                 </div>
 
                 <div className="grid grid-cols-4 gap-2">
-                  {(['+', '-', '*', '/'] as const).map((op) => (
-                    <button
-                      key={op}
-                      className="btn-secondary px-0"
-                      disabled={inputDisabled || selectedIds.length !== 2}
-                      onClick={() => applyCalcOp(op)}
-                    >
-                      {op === '*' ? '×' : op === '/' ? '÷' : op}
-                    </button>
-                  ))}
+                  {(['+', '-', '*', '/'] as const).map((op) => {
+                    const isSelected = operation === op;
+                    return (
+                      <button
+                        key={op}
+                        className={`btn-secondary px-0 ${isSelected ? 'ring-2 ring-brand-500' : ''}`}
+                        disabled={inputDisabled || calcStep !== 'pick_operation'}
+                        onClick={() => selectOperation(op)}
+                      >
+                        {op === '*' ? '×' : op === '/' ? '÷' : op}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {calcError ? <p className="text-amber-300 text-xs">{calcError}</p> : null}
@@ -335,7 +382,7 @@ export function GamePage() {
                 <div className="grid grid-cols-3 gap-2 text-sm">
                   <button className="btn-secondary py-2" disabled={inputDisabled || calcUndoStack.length === 0} onClick={undoLast}>Annuler</button>
                   <button className="btn-secondary py-2" disabled={inputDisabled} onClick={restartCalc}>Recommencer</button>
-                  <button className="btn-secondary py-2" disabled={inputDisabled || selectedIds.length === 0} onClick={clearSelection}>Effacer sélection</button>
+                  <button className="btn-secondary py-2" disabled={inputDisabled || calcStep === 'pick_first'} onClick={clearSelection}>Effacer sélection</button>
                 </div>
 
                 <div className="rounded-xl border border-slate-700 bg-slate-800/70 px-3 py-3">
