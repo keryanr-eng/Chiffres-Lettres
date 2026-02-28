@@ -49,10 +49,11 @@ export const submitLetters = async (attemptId: string, answer: string) => {
   return data as { points: number; status: string };
 };
 
-export const submitNumbers = async (attemptId: string, expression: string) => {
+export const submitNumbers = async (attemptId: string, finalValue: number | null, trace: string) => {
   const { data, error } = await supabase.rpc('submit_numbers_attempt', {
     p_attempt_id: attemptId,
-    p_expression: expression,
+    p_result: finalValue,
+    p_expression: trace,
   });
   if (error) throw error;
   return data as { points: number; computed_value: number; status: string };

@@ -415,7 +415,11 @@ begin
 end;
 $$;
 
-create or replace function submit_numbers_attempt(p_attempt_id uuid, p_expression text)
+create or replace function submit_numbers_attempt(
+  p_attempt_id uuid,
+  p_expression text default null,
+  p_result int default null
+)
 returns jsonb language plpgsql security definer as $$
 declare
   a attempts%rowtype;
@@ -432,11 +436,18 @@ begin
     return jsonb_build_object('points', 0, 'status', 'expired', 'computed_value', null);
   end if;
 
-  if not contains_only_drawn_numbers(a.round_id, p_expression) then
-    raise exception 'Expression invalide: nombres non autorisés';
+  if p_result is not null then
+    computed := p_result;
+  else
+    if p_expression is null or btrim(p_expression) = '' then
+      raise exception 'Résultat ou expression requis';
+    end if;
+    if not contains_only_drawn_numbers(a.round_id, p_expression) then
+      raise exception 'Expression invalide: nombres non autorisés';
+    end if;
+    computed := compute_numbers_value(p_expression);
   end if;
 
-  computed := compute_numbers_value(p_expression);
   select (payload->>'target')::int into target from rounds where id = a.round_id;
   diff := abs(target - computed);
 
@@ -449,7 +460,7 @@ begin
   end;
 
   update attempts
-  set answer_text = p_expression,
+  set answer_text = coalesce(nullif(p_expression, ''), format('Résultat: %s', computed)),
       answer_value = computed,
       points = pts,
       status = 'submitted'
@@ -461,4 +472,4 @@ end;
 $$;
 
 grant execute on function submit_letters_attempt(uuid,text) to anon, authenticated;
-grant execute on function submit_numbers_attempt(uuid,text) to anon, authenticated;
+grant execute on function submit_numbers_attempt(uuid,text,int) to anon, authenticated;
