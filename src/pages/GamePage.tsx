@@ -254,7 +254,11 @@ export function GamePage() {
       }
 
       setLetterSubmitError('');
-      await submitLetters(myAttempt.id, composedWord);
+      const result = await submitLetters(myAttempt.id, composedWord);
+      if (result.status === 'invalid') {
+        setLetterSubmitError('Mot invalide. Corrige ton mot avant de valider.');
+        return;
+      }
       setSelectedLetterIds([]);
     } else {
       await submitNumbers(myAttempt.id, calcFinalValue, calcTrace || `Résultat final: ${String(calcFinalValue)}`);

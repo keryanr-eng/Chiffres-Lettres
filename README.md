@@ -7,7 +7,7 @@ Application React + Vite + TypeScript pour jouer à 2 en asynchrone (style **Des
 - ✅ Jeu en 9 manches dans l’ordre : `L, L, C, L, L, C, L, L, C`.
 - ✅ Chaque joueur joue quand il veut (asynchrone).
 - ✅ Chrono strict par manche côté DB (`started_at` + `deadline_at`), refus après délai.
-- ✅ Mode Lettres (9 lettres) + validation locale dictionnaire FR embarqué.
+- ✅ Mode Lettres (9 lettres) avec validation serveur (table dictionnaire `words` dans Supabase).
 - ✅ Mode Chiffres (6 nombres + cible solvable) + évaluation côté SQL.
 - ✅ PWA installable (manifest + service worker).
 - ✅ UI mobile-first dark, boutons larges, écran “Prêt ?”.
@@ -54,10 +54,40 @@ VITE_SUPABASE_ANON_KEY=xxxx
 
 Ce script crée :
 - les tables (`players`, `games`, `rounds`, `attempts`, etc.),
+- la table dictionnaire `words`,
 - la sécurité RLS,
 - les fonctions RPC utilisées par le front.
 
-### Étape D — Lancer en local
+### Étape D — Importer le dictionnaire FR (obligatoire pour la validation serveur Lettres)
+
+#### Option A (petit/moyen dictionnaire): SQL direct
+- Prépare un fichier SQL d’insert (ex: `supabase/import_words.sql`) avec des lignes du type:
+
+```sql
+insert into public.words(word) values ('bonjour') on conflict do nothing;
+```
+
+- Exécute ce fichier dans **Supabase SQL Editor**.
+
+#### Option B (recommandée): script Node en batch
+1. Mets tes mots (un mot par ligne) dans `data/words_fr.txt`.
+2. Récupère ta `SERVICE_ROLE_KEY` dans **Supabase > Settings > API**.
+3. Lance l’import avec les variables locales:
+
+```bash
+SUPABASE_URL=https://xxxx.supabase.co \
+SUPABASE_SERVICE_ROLE_KEY=ta_cle_service_role \
+npm run import:words
+```
+
+Le script normalise automatiquement les mots (minuscules, sans accents), insère en batch (1000), ignore les doublons, et affiche la progression.
+
+⚠️ **Sécurité importante**
+- Ne mets jamais `SUPABASE_SERVICE_ROLE_KEY` dans GitHub.
+- Ne la mets pas dans `.env` frontend.
+- Utilise-la uniquement en local pour l’import.
+
+### Étape E — Lancer en local
 
 ```bash
 npm run dev
@@ -75,6 +105,7 @@ npm run build    # compiler pour la prod
 npm run preview  # prévisualiser la build
 npm run lint     # vérifier la qualité TypeScript/ESLint
 npm run check    # lint + build
+npm run import:words # importer le dictionnaire FR en base
 ```
 
 ---
@@ -105,8 +136,10 @@ Dans **Settings > Pages** :
 - `src/pages/HomePage.tsx` → écran d’accueil (pseudo, créer/rejoindre une partie)
 - `src/pages/GamePage.tsx` → écran principal de jeu (chrono, saisie, score)
 - `src/lib/gameApi.ts` → appels RPC Supabase
-- `src/data/frenchWords.ts` → dictionnaire FR embarqué (version légère)
-- `supabase/schema.sql` → base SQL complète (tables + RLS + fonctions)
+- `src/data/frenchWords.ts` → dictionnaire embarqué côté UI (feedback rapide)
+- `supabase/schema.sql` → base SQL complète (tables + RLS + fonctions + validation dictionnaire serveur)
+- `scripts/import_words.mjs` → script d’import batch des mots dans `public.words`
+- `data/words_fr.txt` → fichier source (un mot par ligne) pour l’import
 - `vite.config.ts` → config Vite + PWA + base GitHub Pages
 
 ---
@@ -128,8 +161,6 @@ Dans **Settings > Pages** :
 
 - Dictionnaire FR embarqué **minimal** (liste courte) pour rester léger.
   - TODO: brancher un dictionnaire FR libre plus complet (compressé).
-- Validation lettres côté serveur simplifiée (score/temps gérés serveur, dictionnaire local front).
-  - TODO: stocker un hash dictionnaire ou table SQL pour validation serveur stricte.
 - Auth simple par `player_id` localStorage (sans email/mot de passe).
   - TODO: passer à Supabase Auth si besoin multi-device sécurisé.
 

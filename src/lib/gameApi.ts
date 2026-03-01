@@ -46,7 +46,7 @@ export const submitLetters = async (attemptId: string, answer: string) => {
     p_answer: answer,
   });
   if (error) throw error;
-  return data as { points: number; status: string };
+  return data as { points: number; status: 'submitted' | 'expired' | 'invalid'; answer_text?: string };
 };
 
 export const submitNumbers = async (attemptId: string, finalValue: number | null, trace: string) => {

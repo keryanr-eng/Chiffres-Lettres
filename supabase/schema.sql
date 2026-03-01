@@ -10,6 +10,24 @@ create table if not exists players (
   created_at timestamptz not null default now()
 );
 
+create table if not exists words (
+  word text primary key
+);
+
+create or replace function normalize_word(p_value text)
+returns text language sql immutable as $$
+  select lower(regexp_replace(unaccent(coalesce(p_value, '')), '[^a-z]', '', 'g'));
+$$;
+
+create or replace function is_valid_word(p_value text)
+returns boolean language sql stable as $$
+  select exists (
+    select 1
+    from words
+    where word = normalize_word(p_value)
+  );
+$$;
+
 create table if not exists round_config (
   id boolean primary key default true,
   letters_duration_sec int not null default 45,
@@ -390,7 +408,7 @@ returns jsonb language plpgsql security definer as $$
 declare
   a attempts%rowtype;
   pts int := 0;
-  clean text := lower(regexp_replace(unaccent(p_answer), '[^a-z]', '', 'g'));
+  clean text := normalize_word(p_answer);
 begin
   select * into a from attempts where id = p_attempt_id;
   if a.id is null then raise exception 'Attempt introuvable'; end if;
@@ -398,6 +416,10 @@ begin
     update attempts set status = 'expired', points = 0 where id = p_attempt_id;
     perform advance_round_if_ready(a.game_id);
     return jsonb_build_object('points', 0, 'status', 'expired');
+  end if;
+
+  if clean = '' or not is_valid_word(clean) then
+    return jsonb_build_object('points', 0, 'status', 'invalid', 'answer_text', clean);
   end if;
 
   pts := least(char_length(clean), 9);
@@ -411,7 +433,7 @@ begin
   where id = p_attempt_id;
 
   perform advance_round_if_ready(a.game_id);
-  return jsonb_build_object('points', pts, 'status', 'submitted');
+  return jsonb_build_object('points', pts, 'status', 'submitted', 'answer_text', clean);
 end;
 $$;
 
