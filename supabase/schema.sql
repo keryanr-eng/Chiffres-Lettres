@@ -137,66 +137,62 @@ begin
 end;
 $$;
 
+create or replace function pick_random_word(p_min_len int default 4, p_max_len int default 9)
+returns text language sql stable as $$
+  select word
+  from public.words
+  where char_length(word) between p_min_len and p_max_len
+  order by random()
+  limit 1;
+$$;
+
 create or replace function gen_letters_payload()
 returns jsonb language plpgsql as $$
 declare
-  vowels text[] := array[
+  weighted_letters text[] := array[
     'e','e','e','e','e','e','e','e','e','a','a','a','a','a','a','i','i','i','i','i',
-    'o','o','o','o','u','u','u','y'
+    's','s','s','n','n','n','r','r','r','t','t','t','o','o','o','l','l','l','u','u','u',
+    'd','d','c','c','m','m','p','p','v','v','g','g','b','b','f','f','h','j','q','k','w','x','y','z'
   ];
-  consonants text[] := array[
-    's','s','s','n','n','n','r','r','r','t','t','t','l','l','l','d','d','c','c','m','m',
-    'p','p','v','v','g','g','b','b','f','f','h','j','q','k','w','x','z'
-  ];
-  words text[] := array[
-    'ami','amie','arbre','avion','banane','bateau','beau','belle','bonjour','bureau','cabane','cahier','carte',
-    'chat','chien','classe','clavier','code','complet','cuisine','danse','debut','ecole','ecrire','eleve','etoile',
-    'famille','fenetre','fleur','fromage','garage','guitare','heureux','histoire','image','joueur','journal','lampe',
-    'lettre','livre','maison','manger','marine','matin','mercredi','mobile','montagne','musique','nombre','nuage',
-    'orange','ordinateur','pantalon','papier','parler','partie','piano','plage','poisson','portable','pratique',
-    'question','rapide','reponse','route','saison','salade','science','soleil','stylo','tableau','telephone','temps',
-    'tortue','train','valise','velo','voyage','voiture','zebre'
-  ];
-  try_count int := 50;
-  attempt int;
+  fallback_vowels text[] := array['e','e','e','a','a','i','i','o','u','y'];
+  fallback_consonants text[] := array['s','s','n','n','r','r','t','t','l','l','d','c','m','p','v','g','b','f','h','j','q','k','w','x','z'];
+  base_word text;
+  letters text[] := '{}';
   i int;
-  vowel_count int;
-  candidate text[];
-  best_letters text[] := '{}';
-  score int;
-  best_score int := -1;
-  w text;
+  next_char text;
+  j int;
+  k int;
 begin
-  for attempt in 1..try_count loop
-    candidate := '{}';
-    vowel_count := 3 + floor(random() * 3)::int;
+  base_word := pick_random_word(4, 9);
 
-    for i in 1..vowel_count loop
-      candidate := candidate || vowels[1 + floor(random() * array_length(vowels,1))::int];
+  if base_word is not null and base_word <> '' then
+    for i in 1..char_length(base_word) loop
+      letters := letters || substr(base_word, i, 1);
     end loop;
 
-    for i in 1..(9 - vowel_count) loop
-      candidate := candidate || consonants[1 + floor(random() * array_length(consonants,1))::int];
+    while array_length(letters, 1) < 9 loop
+      letters := letters || weighted_letters[1 + floor(random() * array_length(weighted_letters,1))::int];
     end loop;
-
-    score := 0;
-    foreach w in array words loop
-      if can_build_word_from_letters(candidate, w) then
-        score := greatest(score, char_length(w));
-      end if;
+  else
+    for i in 1..4 loop
+      letters := letters || fallback_vowels[1 + floor(random() * array_length(fallback_vowels,1))::int];
     end loop;
+    for i in 1..5 loop
+      letters := letters || fallback_consonants[1 + floor(random() * array_length(fallback_consonants,1))::int];
+    end loop;
+  end if;
 
-    if score > best_score then
-      best_score := score;
-      best_letters := candidate;
-    end if;
-
-    if score >= 2 then
-      exit;
-    end if;
+  for j in reverse array_length(letters, 1)..2 loop
+    k := 1 + floor(random() * j)::int;
+    next_char := letters[j];
+    letters[j] := letters[k];
+    letters[k] := next_char;
   end loop;
 
-  return jsonb_build_object('letters', best_letters);
+  return jsonb_build_object(
+    'letters', letters,
+    'base_word_len', coalesce(char_length(base_word), 0)
+  );
 end;
 $$;
 
@@ -312,6 +308,38 @@ end;
 $$;
 
 grant execute on function join_game_by_code(uuid,text) to anon, authenticated;
+
+create or replace function get_game_state(p_game_id uuid, p_player_id uuid)
+returns jsonb language plpgsql security definer as $$
+declare
+  is_member boolean;
+begin
+  select exists(
+    select 1
+    from game_players gp
+    where gp.game_id = p_game_id
+      and gp.player_id = p_player_id
+  ) into is_member;
+
+  if not is_member then
+    raise exception 'Accès refusé à cette partie';
+  end if;
+
+  return jsonb_build_object(
+    'game', (select row_to_json(g) from (select * from games where id = p_game_id) g),
+    'rounds', (select coalesce(jsonb_agg(r order by r.round_index), '[]'::jsonb) from rounds r where r.game_id = p_game_id),
+    'attempts', (select coalesce(jsonb_agg(a order by a.created_at), '[]'::jsonb) from attempts a where a.game_id = p_game_id),
+    'players', (
+      select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'pseudo', p.pseudo)), '[]'::jsonb)
+      from game_players gp
+      join players p on p.id = gp.player_id
+      where gp.game_id = p_game_id
+    )
+  );
+end;
+$$;
+
+grant execute on function get_game_state(uuid,uuid) to anon, authenticated;
 
 create or replace function start_attempt(p_attempt_id uuid)
 returns jsonb language plpgsql security definer as $$

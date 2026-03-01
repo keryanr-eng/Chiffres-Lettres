@@ -175,3 +175,18 @@ Dans **Settings > Pages** :
 5. Une manche se débloque quand les 2 joueurs ont fini la manche en cours.
 
 Bon jeu 🎯
+
+
+---
+
+## 10) Debug (adversaire invisible / récap manche)
+
+Tu as un guide prêt à l’emploi dans `docs/debug.md`.
+
+Résumé rapide :
+- Vérifie la game par code (`games`).
+- Vérifie les attempts avec jointure `rounds` en utilisant `round_index` (pas `round_number`).
+- Vérifie les joueurs de la game (`game_players`).
+
+⚠️ Erreur fréquente : `invalid input syntax for type uuid: "Nay"`
+=> Tu as mis un pseudo à la place d’un `game_id` UUID.

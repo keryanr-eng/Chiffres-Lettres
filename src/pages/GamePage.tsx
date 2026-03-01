@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { createGame, fetchGameBundle, joinGame, startRound, submitLetters, submitNumbers } from '../lib/gameApi';
 import { normalizeWord } from '../lib/normalize';
 import { readProfile } from '../lib/profile';
@@ -50,6 +50,7 @@ const vibrateLight = () => {
 export function GamePage() {
   const { gameId = '' } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const profile = readProfile();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -63,6 +64,8 @@ export function GamePage() {
   const [players, setPlayers] = useState<PlayerLite[]>([]);
   const [letterSubmitError, setLetterSubmitError] = useState('');
   const [dismissedResultRound, setDismissedResultRound] = useState<number | null>(null);
+  const [realtimeError, setRealtimeError] = useState('');
+  const [lastRealtimeEventAt, setLastRealtimeEventAt] = useState('');
 
   const [letterTiles, setLetterTiles] = useState<LetterTile[]>([]);
   const [letterOrder, setLetterOrder] = useState<string[]>([]);
@@ -124,25 +127,11 @@ export function GamePage() {
     const bundle = await fetchGameBundle(gameId, profile.id);
     setRounds(bundle.rounds);
     setAttempts(bundle.attempts);
+    setAllGameAttempts(bundle.allAttempts);
+    setPlayers(bundle.players);
     setGameCode(bundle.game.code);
     setCurrentRoundIndex(bundle.game.current_round_index);
     setGameStatus(bundle.game.status);
-
-    const [{ data: allAttemptsData }, { data: gamePlayersData }] = await Promise.all([
-      supabase.from('attempts').select('*').eq('game_id', gameId),
-      supabase
-        .from('game_players')
-        .select('player_id, players!inner(id, pseudo)')
-        .eq('game_id', gameId),
-    ]);
-
-    setAllGameAttempts((allAttemptsData ?? []) as AttemptRow[]);
-    const parsedPlayers = (gamePlayersData ?? []).map((row) => {
-      const playersField = (row as { players: { id: string; pseudo: string }[] }).players;
-      const player = Array.isArray(playersField) ? playersField[0] : null;
-      return { id: player?.id ?? '', pseudo: player?.pseudo ?? 'Joueur' };
-    }).filter((player) => player.id);
-    setPlayers(parsedPlayers);
     setLoading(false);
   };
 
@@ -167,10 +156,15 @@ export function GamePage() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'attempts', filter: `game_id=eq.${gameId}` },
         () => {
+          setLastRealtimeEventAt(new Date().toISOString());
           refresh().catch(() => undefined);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR') {
+          setRealtimeError('Realtime indisponible, fallback polling actif.');
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -480,6 +474,14 @@ export function GamePage() {
                 : 'idle';
 
   const shouldShowRoundContent = uiState === 'playing' || uiState === 'expired' || uiState === 'submitted';
+  const debugMode = useMemo(() => {
+    const fromQuery = new URLSearchParams(location.search).get('debug') === '1';
+    const fromStorage = localStorage.getItem('DEBUG') === 'true';
+    return fromQuery || fromStorage;
+  }, [location.search]);
+
+  const currentRoundAttempts = round ? (attemptsByRoundId.get(round.id) ?? []) : [];
+
 
   const totalsByPlayer = allGameAttempts.reduce<Record<string, number>>((acc, attempt) => {
     acc[attempt.player_id] = (acc[attempt.player_id] ?? 0) + (attempt.points ?? 0);
@@ -745,6 +747,26 @@ export function GamePage() {
         Actualiser
       </button>
 
+
+      {debugMode ? (
+        <section className="card text-xs">
+          <h3 className="font-bold mb-2">Debug</h3>
+          <p>gameId: {gameId}</p>
+          <p>playerId: {profile.id}</p>
+          <p>opponentId: {opponent?.id ?? '—'}</p>
+          <p>attempts total chargées: {allGameAttempts.length}</p>
+          <p>attempts manche courante: {currentRoundAttempts.length}</p>
+          <p>last realtime event: {lastRealtimeEventAt || '—'}</p>
+          <p>realtime error: {realtimeError || 'none'}</p>
+          <ul className="mt-2 space-y-1">
+            {currentRoundAttempts.map((attempt) => (
+              <li key={attempt.id}>
+                {attempt.player_id === profile.id ? 'toi' : 'adv'} · status={attempt.status} · ans={attempt.answer_text ?? '—'} · pts={attempt.points}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       {loading ? <p className="text-slate-400 text-sm">Chargement...</p> : null}
       {error ? <p className="text-rose-400 text-sm">{error}</p> : null}
     </main>

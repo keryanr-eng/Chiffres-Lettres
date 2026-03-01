@@ -22,15 +22,27 @@ export const joinGame = async (playerId: string, code: string) => {
 };
 
 export const fetchGameBundle = async (gameId: string, playerId: string) => {
-  const [{ data: game }, { data: rounds }, { data: attempts }] = await Promise.all([
-    supabase.from('games').select('*').eq('id', gameId).single(),
-    supabase.from('rounds').select('*').eq('game_id', gameId).order('round_index', { ascending: true }),
-    supabase.from('attempts').select('*').eq('game_id', gameId).eq('player_id', playerId),
-  ]);
+  const { data, error } = await supabase.rpc('get_game_state', {
+    p_game_id: gameId,
+    p_player_id: playerId,
+  });
+  if (error) throw error;
+
+  const payload = data as {
+    game: GameRow;
+    rounds: RoundRow[];
+    attempts: AttemptRow[];
+    players: { id: string; pseudo: string }[];
+  };
+
+  const myAttempts = (payload.attempts ?? []).filter((attempt) => attempt.player_id === playerId);
+
   return {
-    game: game as unknown as GameRow,
-    rounds: (rounds ?? []) as unknown as RoundRow[],
-    attempts: (attempts ?? []) as unknown as AttemptRow[],
+    game: payload.game,
+    rounds: payload.rounds ?? [],
+    attempts: myAttempts,
+    allAttempts: payload.attempts ?? [],
+    players: payload.players ?? [],
   };
 };
 
