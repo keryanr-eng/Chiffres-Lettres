@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { FRENCH_WORDS } from '../data/frenchWords';
 import { createGame, fetchGameBundle, joinGame, startRound, submitLetters, submitNumbers } from '../lib/gameApi';
 import { normalizeWord } from '../lib/normalize';
 import { readProfile } from '../lib/profile';
@@ -22,8 +21,6 @@ type CalcSnapshot = {
 
 type LetterTile = { id: string; letter: string };
 type PlayerLite = { id: string; pseudo: string };
-
-const dictionary = new Set(FRENCH_WORDS.map((word) => normalizeWord(word)));
 
 const secondsLeft = (deadline: string | null) => {
   if (!deadline) return 0;
@@ -114,12 +111,12 @@ export function GamePage() {
     const available = [...(round.payload.letters ?? [])];
     for (const char of normalizedWord) {
       const idx = available.indexOf(char);
-      if (idx === -1) return { valid: false, message: '⚠️ Ce mot utilise des lettres absentes du tirage.' };
+      if (idx === -1) return { valid: false, message: '⚠️ Lettres incohérentes avec le tirage.' };
       available.splice(idx, 1);
     }
 
-    if (!dictionary.has(normalizedWord)) return { valid: false, message: '⚠️ Mot invalide (hors dictionnaire).' };
-    return { valid: true, message: '✅ Mot valide. Tu peux valider.' };
+    if (normalizedWord.length < 2) return { valid: false, message: '⚠️ Le mot doit contenir au moins 2 lettres.' };
+    return { valid: true, message: '✅ Prêt à valider (vérification dictionnaire côté serveur).' };
   }, [round, normalizedWord]);
 
   const refresh = async () => {
@@ -248,14 +245,13 @@ export function GamePage() {
 
     if (round.round_type === 'letters') {
       if (!letterValidation.valid) {
-        setLetterSubmitError('Mot invalide. Corrige ton mot avant de valider.');
         return;
       }
 
       setLetterSubmitError('');
       const result = await submitLetters(myAttempt.id, composedWord);
       if (result.status === 'invalid') {
-        setLetterSubmitError('Mot invalide. Corrige ton mot avant de valider.');
+        setLetterSubmitError('Mot invalide (hors dictionnaire).');
         return;
       }
       setSelectedLetterIds([]);
