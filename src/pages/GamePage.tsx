@@ -20,6 +20,8 @@ type CalcSnapshot = {
   operation: CalcOp | null;
 };
 
+type LetterTile = { id: string; letter: string };
+
 const dictionary = new Set(FRENCH_WORDS.map((word) => normalizeWord(word)));
 
 const secondsLeft = (deadline: string | null) => {
@@ -30,12 +32,21 @@ const secondsLeft = (deadline: string | null) => {
 const initCalcTiles = (numbers: number[] = []) =>
   numbers.map((value, idx) => ({ id: `${idx}-${value}`, value }));
 
+const initLetterTiles = (letters: string[] = []) =>
+  letters.map((letter, idx) => ({ id: `l-${idx}-${letter}`, letter }));
+
 const applyOperation = (a: number, b: number, op: CalcOp) => {
   if (op === '+') return { ok: true, value: a + b } as const;
   if (op === '-') return { ok: true, value: a - b } as const;
   if (op === '*') return { ok: true, value: a * b } as const;
   if (b === 0 || a % b !== 0) return { ok: false, value: 0 } as const;
   return { ok: true, value: a / b } as const;
+};
+
+const vibrateLight = () => {
+  if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+    navigator.vibrate(10);
+  }
 };
 
 export function GamePage() {
@@ -47,9 +58,13 @@ export function GamePage() {
   const [attempts, setAttempts] = useState<AttemptRow[]>([]);
   const [gameCode, setGameCode] = useState('');
   const [currentRoundIndex, setCurrentRoundIndex] = useState(0);
-  const [word, setWord] = useState('');
   const [clock, setClock] = useState(0);
   const [allAttempts, setAllAttempts] = useState<AttemptRow[]>([]);
+
+  const [letterTiles, setLetterTiles] = useState<LetterTile[]>([]);
+  const [letterOrder, setLetterOrder] = useState<string[]>([]);
+  const [selectedLetterIds, setSelectedLetterIds] = useState<string[]>([]);
+  const [isShuffling, setIsShuffling] = useState(false);
 
   const [calcTiles, setCalcTiles] = useState<CalcTile[]>([]);
   const [calcHistory, setCalcHistory] = useState<string[]>([]);
@@ -69,7 +84,7 @@ export function GamePage() {
   const isFinished = myAttempt?.status === 'submitted' || myAttempt?.status === 'expired';
   const canStart = myAttempt?.status === 'pending';
   const isTimeUpWithoutSubmit = isStarted && clock === 0;
-  const canSubmitLetters = isStarted && clock > 0;
+  const canSubmitLetters = isStarted && clock > 0 && selectedLetterIds.length > 0;
   const canSubmitNumbers = isStarted && clock > 0 && calcFinalValue !== null;
   const inputDisabled = !isStarted || clock === 0 || isFinished;
 
@@ -80,6 +95,11 @@ export function GamePage() {
 
   const target = round?.payload.target ?? 0;
   const liveGap = calcFinalValue === null ? '-' : Math.abs(target - calcFinalValue);
+
+  const composedWord = useMemo(() => {
+    const byId = new Map(letterTiles.map((tile) => [tile.id, tile.letter]));
+    return selectedLetterIds.map((id) => byId.get(id) ?? '').join('');
+  }, [letterTiles, selectedLetterIds]);
 
   const refresh = async () => {
     if (!profile) return;
@@ -146,9 +166,18 @@ export function GamePage() {
     setOperation(null);
   }, [round?.id, round?.round_type, round?.payload.numbers]);
 
+  useEffect(() => {
+    if (round?.round_type !== 'letters') return;
+    const tiles = initLetterTiles(round.payload.letters);
+    setLetterTiles(tiles);
+    setLetterOrder(tiles.map((tile) => tile.id));
+    setSelectedLetterIds([]);
+    setIsShuffling(false);
+  }, [round?.id, round?.round_type, round?.payload.letters]);
+
   const letterCheck = useMemo(() => {
     if (round?.round_type !== 'letters') return '';
-    const normalized = normalizeWord(word);
+    const normalized = normalizeWord(composedWord);
     if (!normalized) return '';
     const available = [...(round.payload.letters ?? [])];
     for (const char of normalized) {
@@ -158,7 +187,7 @@ export function GamePage() {
     }
     if (!dictionary.has(normalized)) return '⚠️ Mot non trouvé dans le dictionnaire embarqué.';
     return '✅ Mot valide localement. Tu peux soumettre.';
-  }, [round, word]);
+  }, [round, composedWord]);
 
   const onStartRound = async () => {
     if (!myAttempt) return;
@@ -168,9 +197,10 @@ export function GamePage() {
 
   const onSubmit = async () => {
     if (!myAttempt || !round || !isStarted || isFinished) return;
+    vibrateLight();
     if (round.round_type === 'letters') {
-      await submitLetters(myAttempt.id, word);
-      setWord('');
+      await submitLetters(myAttempt.id, composedWord);
+      setSelectedLetterIds([]);
     } else {
       await submitNumbers(myAttempt.id, calcFinalValue, calcTrace || `Résultat final: ${String(calcFinalValue)}`);
     }
@@ -185,6 +215,49 @@ export function GamePage() {
       await submitNumbers(myAttempt.id, null, 'Passé (temps écoulé)');
     }
     await refresh();
+  };
+
+  const onLetterTileClick = (tileId: string) => {
+    if (inputDisabled || round?.round_type !== 'letters') return;
+    if (selectedLetterIds.includes(tileId)) return;
+    vibrateLight();
+    setSelectedLetterIds((prev) => [...prev, tileId]);
+  };
+
+  const onWordTileClick = (tileId: string, index: number) => {
+    if (inputDisabled || round?.round_type !== 'letters') return;
+    vibrateLight();
+    setSelectedLetterIds((prev) => {
+      if (prev[index] !== tileId) return prev;
+      return prev.filter((_, idx) => idx !== index);
+    });
+  };
+
+  const onBackspace = () => {
+    if (inputDisabled || selectedLetterIds.length === 0) return;
+    vibrateLight();
+    setSelectedLetterIds((prev) => prev.slice(0, -1));
+  };
+
+  const onClearWord = () => {
+    if (inputDisabled || selectedLetterIds.length === 0) return;
+    vibrateLight();
+    setSelectedLetterIds([]);
+  };
+
+  const onShuffleLetters = () => {
+    if (inputDisabled || round?.round_type !== 'letters') return;
+    vibrateLight();
+    setLetterOrder((prev) => {
+      const next = [...prev];
+      for (let i = next.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [next[i], next[j]] = [next[j], next[i]];
+      }
+      return next;
+    });
+    setIsShuffling(true);
+    window.setTimeout(() => setIsShuffling(false), 180);
   };
 
   const clearSelection = () => {
@@ -295,6 +368,9 @@ export function GamePage() {
     setOperation(null);
   };
 
+  const usedLetterIds = new Set(selectedLetterIds);
+  const letterById = new Map(letterTiles.map((tile) => [tile.id, tile]));
+
   if (!profile) {
     return <main className="p-4">Profil absent.</main>;
   }
@@ -317,16 +393,57 @@ export function GamePage() {
         {myAttempt && myAttempt.status !== 'pending' ? (
           <>
             {round?.round_type === 'letters' ? (
-              <div className="grid grid-cols-3 gap-2">
-                {round.payload.letters?.map((letter, idx) => (
-                  <span
-                    key={`${letter}-${idx}`}
-                    className="rounded-lg bg-slate-800 px-3 py-3 text-center text-xl font-black uppercase"
-                  >
-                    {letter}
-                  </span>
-                ))}
-              </div>
+              <>
+                <div className={`grid grid-cols-3 gap-2 transition-transform duration-200 ${isShuffling ? 'scale-[0.97]' : 'scale-100'}`}>
+                  {letterOrder.map((tileId) => {
+                    const tile = letterById.get(tileId);
+                    if (!tile) return null;
+                    const used = usedLetterIds.has(tile.id);
+                    return (
+                      <button
+                        key={tile.id}
+                        className={`rounded-lg px-3 py-3 text-center text-xl font-black uppercase border transition ${
+                          used
+                            ? 'bg-slate-800/40 border-slate-700/40 text-slate-500'
+                            : 'bg-slate-800 border-slate-700 text-slate-100 active:scale-[0.98]'
+                        }`}
+                        disabled={inputDisabled || used}
+                        onClick={() => onLetterTileClick(tile.id)}
+                      >
+                        {tile.letter}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="rounded-xl border border-slate-700 bg-slate-900/70 p-3">
+                  <p className="text-xs text-slate-400 mb-2">Mot en cours</p>
+                  <div className="flex flex-wrap gap-2 min-h-10">
+                    {selectedLetterIds.length === 0 ? (
+                      <span className="text-slate-500 text-sm">Aucune lettre sélectionnée.</span>
+                    ) : (
+                      selectedLetterIds.map((id, idx) => (
+                        <button
+                          key={`${id}-${idx}`}
+                          className="rounded-md bg-brand-500 text-slate-950 px-2 py-1 text-sm font-bold"
+                          onClick={() => onWordTileClick(id, idx)}
+                          disabled={inputDisabled}
+                        >
+                          {letterById.get(id)?.letter ?? ''}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-4 gap-2 text-sm">
+                  <button className="btn-secondary py-2" onClick={onBackspace} disabled={inputDisabled || selectedLetterIds.length === 0}>Retour</button>
+                  <button className="btn-secondary py-2" onClick={onClearWord} disabled={inputDisabled || selectedLetterIds.length === 0}>Effacer</button>
+                  <button className="btn-secondary py-2 col-span-2" onClick={onShuffleLetters} disabled={inputDisabled}>Mélanger</button>
+                </div>
+
+                {isStarted && clock > 0 && letterCheck ? <p className="text-xs">{letterCheck}</p> : null}
+              </>
             ) : (
               <>
                 <div className="flex items-center justify-between rounded-xl bg-slate-800/70 border border-slate-700 px-3 py-2">
@@ -405,19 +522,6 @@ export function GamePage() {
                 </div>
               </>
             )}
-
-            {round?.round_type === 'letters' ? (
-              <>
-                <input
-                  className="rounded-xl bg-slate-800 border border-slate-700 px-3 py-3 disabled:opacity-60"
-                  value={word}
-                  onChange={(e) => setWord(e.target.value)}
-                  placeholder="Ton mot"
-                  disabled={inputDisabled}
-                />
-                {isStarted && clock > 0 && letterCheck ? <p className="text-xs">{letterCheck}</p> : null}
-              </>
-            ) : null}
 
             <button
               className="btn-primary"
