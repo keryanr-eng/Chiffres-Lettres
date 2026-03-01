@@ -60,7 +60,6 @@ export function GamePage() {
   const [gameStatus, setGameStatus] = useState<'waiting' | 'active' | 'finished'>('waiting');
   const [currentRoundIndex, setCurrentRoundIndex] = useState(0);
   const [clock, setClock] = useState(0);
-  const [allAttempts, setAllAttempts] = useState<AttemptRow[]>([]);
   const [players, setPlayers] = useState<PlayerLite[]>([]);
   const [letterSubmitError, setLetterSubmitError] = useState('');
   const [dismissedResultRound, setDismissedResultRound] = useState<number | null>(null);
@@ -129,10 +128,7 @@ export function GamePage() {
     setCurrentRoundIndex(bundle.game.current_round_index);
     setGameStatus(bundle.game.status);
 
-    const roundId = bundle.rounds[bundle.game.current_round_index]?.id;
-
-    const [{ data: currentRoundAttempts }, { data: allAttemptsData }, { data: gamePlayersData }] = await Promise.all([
-      roundId ? supabase.from('attempts').select('*').eq('round_id', roundId) : Promise.resolve({ data: [] }),
+    const [{ data: allAttemptsData }, { data: gamePlayersData }] = await Promise.all([
       supabase.from('attempts').select('*').eq('game_id', gameId),
       supabase
         .from('game_players')
@@ -140,7 +136,6 @@ export function GamePage() {
         .eq('game_id', gameId),
     ]);
 
-    setAllAttempts((currentRoundAttempts ?? []) as AttemptRow[]);
     setAllGameAttempts((allAttemptsData ?? []) as AttemptRow[]);
     const parsedPlayers = (gamePlayersData ?? []).map((row) => {
       const playersField = (row as { players: { id: string; pseudo: string }[] }).players;
@@ -430,24 +425,40 @@ export function GamePage() {
   const usedLetterIds = new Set(selectedLetterIds);
   const letterById = new Map(letterTiles.map((tile) => [tile.id, tile]));
 
-  const currentRoundFinishedByBoth = allAttempts.length === 2 && allAttempts.every((a) => a.status === 'submitted' || a.status === 'expired');
+  const attemptsByRoundId = useMemo(() => {
+    const map = new Map<string, AttemptRow[]>();
+    for (const attempt of allGameAttempts) {
+      const arr = map.get(attempt.round_id) ?? [];
+      arr.push(attempt);
+      map.set(attempt.round_id, arr);
+    }
+    return map;
+  }, [allGameAttempts]);
 
-  const displayedResultRoundIndex = currentRoundFinishedByBoth
-    ? currentRoundIndex
-    : currentRoundIndex > 0
-      ? currentRoundIndex - 1
-      : null;
+  const isRoundResolved = (roundId: string | undefined) => {
+    if (!roundId) return false;
+    const roundAttempts = attemptsByRoundId.get(roundId) ?? [];
+    if (roundAttempts.length < 2) return false;
+    return roundAttempts.every((attempt) => attempt.status === 'submitted' || attempt.status === 'expired');
+  };
+
+  const currentRoundFinishedByBoth = isRoundResolved(round?.id);
+
+  const displayedResultRoundIndex = useMemo(() => {
+    if (currentRoundFinishedByBoth) return currentRoundIndex;
+    if (currentRoundIndex <= 0) return null;
+    const previousRound = rounds[currentRoundIndex - 1];
+    return isRoundResolved(previousRound?.id) ? currentRoundIndex - 1 : null;
+  }, [currentRoundFinishedByBoth, currentRoundIndex, rounds, attemptsByRoundId]);
 
   const resultRound = displayedResultRoundIndex !== null ? rounds[displayedResultRoundIndex] : undefined;
-  const resultRoundAttempts = resultRound
-    ? allGameAttempts.filter((attempt) => attempt.round_id === resultRound.id)
-    : [];
+  const resultRoundAttempts = resultRound ? (attemptsByRoundId.get(resultRound.id) ?? []) : [];
 
   const showResultPanel =
     displayedResultRoundIndex !== null &&
     dismissedResultRound !== displayedResultRoundIndex &&
-    resultRoundAttempts.length === 2 &&
-    resultRoundAttempts.every((attempt) => attempt.status === 'submitted' || attempt.status === 'expired');
+    resultRoundAttempts.length >= 2 &&
+    resultRoundAttempts.some((attempt) => attempt.player_id === (profile?.id ?? ''));
 
   const opponent = players.find((player) => player.id !== (profile?.id ?? ''));
   const myResultAttempt = resultRoundAttempts.find((attempt) => attempt.player_id === (profile?.id ?? ''));
