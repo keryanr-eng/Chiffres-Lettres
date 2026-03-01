@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { FRENCH_WORDS } from '../data/frenchWords';
-import { fetchGameBundle, startRound, submitLetters, submitNumbers } from '../lib/gameApi';
+import { createGame, fetchGameBundle, joinGame, startRound, submitLetters, submitNumbers } from '../lib/gameApi';
 import { normalizeWord } from '../lib/normalize';
 import { readProfile } from '../lib/profile';
 import { supabase } from '../lib/supabase';
@@ -21,6 +21,7 @@ type CalcSnapshot = {
 };
 
 type LetterTile = { id: string; letter: string };
+type PlayerLite = { id: string; pseudo: string };
 
 const dictionary = new Set(FRENCH_WORDS.map((word) => normalizeWord(word)));
 
@@ -51,15 +52,21 @@ const vibrateLight = () => {
 
 export function GamePage() {
   const { gameId = '' } = useParams();
+  const navigate = useNavigate();
   const profile = readProfile();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [attempts, setAttempts] = useState<AttemptRow[]>([]);
+  const [allGameAttempts, setAllGameAttempts] = useState<AttemptRow[]>([]);
   const [gameCode, setGameCode] = useState('');
+  const [gameStatus, setGameStatus] = useState<'waiting' | 'active' | 'finished'>('waiting');
   const [currentRoundIndex, setCurrentRoundIndex] = useState(0);
   const [clock, setClock] = useState(0);
   const [allAttempts, setAllAttempts] = useState<AttemptRow[]>([]);
+  const [players, setPlayers] = useState<PlayerLite[]>([]);
+  const [letterSubmitError, setLetterSubmitError] = useState('');
+  const [dismissedResultRound, setDismissedResultRound] = useState<number | null>(null);
 
   const [letterTiles, setLetterTiles] = useState<LetterTile[]>([]);
   const [letterOrder, setLetterOrder] = useState<string[]>([]);
@@ -84,13 +91,11 @@ export function GamePage() {
   const isFinished = myAttempt?.status === 'submitted' || myAttempt?.status === 'expired';
   const canStart = myAttempt?.status === 'pending';
   const isTimeUpWithoutSubmit = isStarted && clock === 0;
-  const canSubmitLetters = isStarted && clock > 0 && selectedLetterIds.length > 0;
   const canSubmitNumbers = isStarted && clock > 0 && calcFinalValue !== null;
   const inputDisabled = !isStarted || clock === 0 || isFinished;
 
-  const myScore = attempts.reduce((sum, a) => sum + (a.points ?? 0), 0);
-  const oppScore = allAttempts
-    .filter((a) => a.player_id !== profile?.id)
+  const myScore = allGameAttempts
+    .filter((attempt) => attempt.player_id === profile?.id)
     .reduce((sum, a) => sum + (a.points ?? 0), 0);
 
   const target = round?.payload.target ?? 0;
@@ -101,6 +106,23 @@ export function GamePage() {
     return selectedLetterIds.map((id) => byId.get(id) ?? '').join('');
   }, [letterTiles, selectedLetterIds]);
 
+  const normalizedWord = useMemo(() => normalizeWord(composedWord), [composedWord]);
+
+  const letterValidation = useMemo(() => {
+    if (round?.round_type !== 'letters') return { valid: false, message: '' };
+    if (!normalizedWord) return { valid: false, message: '' };
+
+    const available = [...(round.payload.letters ?? [])];
+    for (const char of normalizedWord) {
+      const idx = available.indexOf(char);
+      if (idx === -1) return { valid: false, message: '⚠️ Ce mot utilise des lettres absentes du tirage.' };
+      available.splice(idx, 1);
+    }
+
+    if (!dictionary.has(normalizedWord)) return { valid: false, message: '⚠️ Mot invalide (hors dictionnaire).' };
+    return { valid: true, message: '✅ Mot valide. Tu peux valider.' };
+  }, [round, normalizedWord]);
+
   const refresh = async () => {
     if (!profile) return;
     setLoading(true);
@@ -109,11 +131,27 @@ export function GamePage() {
     setAttempts(bundle.attempts);
     setGameCode(bundle.game.code);
     setCurrentRoundIndex(bundle.game.current_round_index);
+    setGameStatus(bundle.game.status);
+
     const roundId = bundle.rounds[bundle.game.current_round_index]?.id;
-    if (roundId) {
-      const { data } = await supabase.from('attempts').select('*').eq('round_id', roundId);
-      setAllAttempts((data ?? []) as AttemptRow[]);
-    }
+
+    const [{ data: currentRoundAttempts }, { data: allAttemptsData }, { data: gamePlayersData }] = await Promise.all([
+      roundId ? supabase.from('attempts').select('*').eq('round_id', roundId) : Promise.resolve({ data: [] }),
+      supabase.from('attempts').select('*').eq('game_id', gameId),
+      supabase
+        .from('game_players')
+        .select('player_id, players!inner(id, pseudo)')
+        .eq('game_id', gameId),
+    ]);
+
+    setAllAttempts((currentRoundAttempts ?? []) as AttemptRow[]);
+    setAllGameAttempts((allAttemptsData ?? []) as AttemptRow[]);
+    const parsedPlayers = (gamePlayersData ?? []).map((row) => {
+      const playersField = (row as { players: { id: string; pseudo: string }[] }).players;
+      const player = Array.isArray(playersField) ? playersField[0] : null;
+      return { id: player?.id ?? '', pseudo: player?.pseudo ?? 'Joueur' };
+    }).filter((player) => player.id);
+    setPlayers(parsedPlayers);
     setLoading(false);
   };
 
@@ -129,6 +167,25 @@ export function GamePage() {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameId]);
+
+  useEffect(() => {
+    if (!profile) return;
+    const channel = supabase
+      .channel(`attempts-game-${gameId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'attempts', filter: `game_id=eq.${gameId}` },
+        () => {
+          refresh().catch(() => undefined);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameId, profile?.id]);
 
   const isWaitingState = !!myAttempt && (myAttempt.status === 'pending' || myAttempt.status === 'submitted' || myAttempt.status === 'expired');
 
@@ -173,21 +230,12 @@ export function GamePage() {
     setLetterOrder(tiles.map((tile) => tile.id));
     setSelectedLetterIds([]);
     setIsShuffling(false);
+    setLetterSubmitError('');
   }, [round?.id, round?.round_type, round?.payload.letters]);
 
-  const letterCheck = useMemo(() => {
-    if (round?.round_type !== 'letters') return '';
-    const normalized = normalizeWord(composedWord);
-    if (!normalized) return '';
-    const available = [...(round.payload.letters ?? [])];
-    for (const char of normalized) {
-      const idx = available.indexOf(char);
-      if (idx === -1) return '⚠️ Ce mot utilise des lettres absentes du tirage.';
-      available.splice(idx, 1);
-    }
-    if (!dictionary.has(normalized)) return '⚠️ Mot non trouvé dans le dictionnaire embarqué.';
-    return '✅ Mot valide localement. Tu peux soumettre.';
-  }, [round, composedWord]);
+  useEffect(() => {
+    setDismissedResultRound(null);
+  }, [currentRoundIndex]);
 
   const onStartRound = async () => {
     if (!myAttempt) return;
@@ -198,12 +246,20 @@ export function GamePage() {
   const onSubmit = async () => {
     if (!myAttempt || !round || !isStarted || isFinished) return;
     vibrateLight();
+
     if (round.round_type === 'letters') {
+      if (!letterValidation.valid) {
+        setLetterSubmitError('Mot invalide. Corrige ton mot avant de valider.');
+        return;
+      }
+
+      setLetterSubmitError('');
       await submitLetters(myAttempt.id, composedWord);
       setSelectedLetterIds([]);
     } else {
       await submitNumbers(myAttempt.id, calcFinalValue, calcTrace || `Résultat final: ${String(calcFinalValue)}`);
     }
+
     await refresh();
   };
 
@@ -221,6 +277,7 @@ export function GamePage() {
     if (inputDisabled || round?.round_type !== 'letters') return;
     if (selectedLetterIds.includes(tileId)) return;
     vibrateLight();
+    setLetterSubmitError('');
     setSelectedLetterIds((prev) => [...prev, tileId]);
   };
 
@@ -231,18 +288,21 @@ export function GamePage() {
       if (prev[index] !== tileId) return prev;
       return prev.filter((_, idx) => idx !== index);
     });
+    setLetterSubmitError('');
   };
 
   const onBackspace = () => {
     if (inputDisabled || selectedLetterIds.length === 0) return;
     vibrateLight();
     setSelectedLetterIds((prev) => prev.slice(0, -1));
+    setLetterSubmitError('');
   };
 
   const onClearWord = () => {
     if (inputDisabled || selectedLetterIds.length === 0) return;
     vibrateLight();
     setSelectedLetterIds([]);
+    setLetterSubmitError('');
   };
 
   const onShuffleLetters = () => {
@@ -371,8 +431,80 @@ export function GamePage() {
   const usedLetterIds = new Set(selectedLetterIds);
   const letterById = new Map(letterTiles.map((tile) => [tile.id, tile]));
 
+  const currentRoundFinishedByBoth = allAttempts.length === 2 && allAttempts.every((a) => a.status === 'submitted' || a.status === 'expired');
+
+  const displayedResultRoundIndex = currentRoundFinishedByBoth
+    ? currentRoundIndex
+    : currentRoundIndex > 0
+      ? currentRoundIndex - 1
+      : null;
+
+  const resultRound = displayedResultRoundIndex !== null ? rounds[displayedResultRoundIndex] : undefined;
+  const resultRoundAttempts = resultRound
+    ? allGameAttempts.filter((attempt) => attempt.round_id === resultRound.id)
+    : [];
+
+  const showResultPanel =
+    displayedResultRoundIndex !== null &&
+    dismissedResultRound !== displayedResultRoundIndex &&
+    resultRoundAttempts.length === 2 &&
+    resultRoundAttempts.every((attempt) => attempt.status === 'submitted' || attempt.status === 'expired');
+
+  const totalsByPlayer = allGameAttempts.reduce<Record<string, number>>((acc, attempt) => {
+    acc[attempt.player_id] = (acc[attempt.player_id] ?? 0) + (attempt.points ?? 0);
+    return acc;
+  }, {});
+
+  const goToNextRound = () => {
+    setDismissedResultRound(displayedResultRoundIndex);
+    refresh().catch(() => undefined);
+  };
+
+  const onReplay = async () => {
+    if (!profile) return;
+    try {
+      const newGame = await createGame(profile.id);
+      const opponent = players.find((player) => player.id !== profile.id);
+      if (opponent) {
+        await joinGame(opponent.id, newGame.code);
+      }
+      navigate(`/game/${newGame.game_id}`);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
   if (!profile) {
     return <main className="p-4">Profil absent.</main>;
+  }
+
+  if (gameStatus === 'finished') {
+    const sortedFinal = players
+      .map((player) => ({
+        ...player,
+        total: totalsByPlayer[player.id] ?? 0,
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    return (
+      <main className="mx-auto max-w-md min-h-screen p-4 flex flex-col gap-4">
+        <section className="card">
+          <h1 className="text-2xl font-black">Partie terminée 🎉</h1>
+          <p className="text-slate-300 mt-1">Score final</p>
+          <div className="mt-3 space-y-2">
+            {sortedFinal.map((player) => (
+              <div key={player.id} className="flex items-center justify-between rounded-lg bg-slate-800 px-3 py-2">
+                <p className="font-semibold">{player.pseudo}</p>
+                <p className="font-black">{player.total} pts</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <button className="btn-primary" onClick={onReplay}>Rejouer</button>
+        <button className="btn-secondary" onClick={() => navigate('/')}>Retour menu</button>
+      </main>
+    );
   }
 
   return (
@@ -381,6 +513,26 @@ export function GamePage() {
         <p className="text-sm text-slate-400">Code partie à partager</p>
         <p className="text-3xl font-black tracking-widest">{gameCode || '...'}</p>
       </section>
+
+      {showResultPanel ? (
+        <section className="card">
+          <h2 className="font-bold">Résultat manche {displayedResultRoundIndex! + 1}</h2>
+          <div className="mt-3 space-y-2">
+            {players.map((player) => {
+              const attempt = resultRoundAttempts.find((row) => row.player_id === player.id);
+              return (
+                <div key={player.id} className="rounded-lg bg-slate-800 px-3 py-2">
+                  <p className="font-semibold">{player.pseudo}</p>
+                  <p className="text-sm text-slate-300">Réponse : {attempt?.answer_text ?? '—'}</p>
+                  <p className="text-sm">Points manche : <strong>{attempt?.points ?? 0}</strong></p>
+                  <p className="text-sm">Total : <strong>{totalsByPlayer[player.id] ?? 0}</strong></p>
+                </div>
+              );
+            })}
+          </div>
+          <button className="btn-primary mt-3" onClick={goToNextRound}>Manche suivante</button>
+        </section>
+      ) : null}
 
       <section className="card flex flex-col gap-3">
         <div className="flex items-center justify-between gap-2">
@@ -442,7 +594,8 @@ export function GamePage() {
                   <button className="btn-secondary py-2 col-span-2" onClick={onShuffleLetters} disabled={inputDisabled}>Mélanger</button>
                 </div>
 
-                {isStarted && clock > 0 && letterCheck ? <p className="text-xs">{letterCheck}</p> : null}
+                {letterSubmitError ? <p className="text-rose-400 text-sm">{letterSubmitError}</p> : null}
+                {isStarted && clock > 0 && letterValidation.message ? <p className="text-xs">{letterValidation.message}</p> : null}
               </>
             ) : (
               <>
@@ -525,7 +678,7 @@ export function GamePage() {
 
             <button
               className="btn-primary"
-              disabled={round?.round_type === 'letters' ? !canSubmitLetters : !canSubmitNumbers}
+              disabled={round?.round_type === 'letters' ? !isStarted || clock <= 0 : !canSubmitNumbers}
               onClick={onSubmit}
             >
               Valider
@@ -547,8 +700,12 @@ export function GamePage() {
 
       <section className="card">
         <h2 className="font-bold">Score</h2>
-        <p>Toi : <strong>{myScore}</strong> pts</p>
-        <p>Adversaire : <strong>{oppScore}</strong> pts</p>
+        <div className="space-y-1">
+          {players.map((player) => (
+            <p key={player.id}>{player.pseudo} : <strong>{totalsByPlayer[player.id] ?? 0}</strong> pts</p>
+          ))}
+        </div>
+        <p className="text-sm text-slate-400 mt-2">Ton total : {myScore} pts</p>
       </section>
 
       <button
