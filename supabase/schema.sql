@@ -14,6 +14,7 @@ create table if not exists words (
   word text primary key
 );
 
+drop function if exists public.normalize_word(text);
 create or replace function normalize_word(p_value text)
 returns text language sql immutable as $$
   select lower(regexp_replace(unaccent(coalesce(p_value, '')), '[^a-z]', '', 'g'));

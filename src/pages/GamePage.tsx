@@ -89,7 +89,6 @@ export function GamePage() {
 
   const isStarted = myAttempt?.status === 'started';
   const isFinished = myAttempt?.status === 'submitted' || myAttempt?.status === 'expired';
-  const canStart = myAttempt?.status === 'pending';
   const isTimeUpWithoutSubmit = isStarted && clock === 0;
   const canSubmitNumbers = isStarted && clock > 0 && calcFinalValue !== null;
   const inputDisabled = !isStarted || clock === 0 || isFinished;
@@ -454,6 +453,27 @@ export function GamePage() {
     resultRoundAttempts.length === 2 &&
     resultRoundAttempts.every((attempt) => attempt.status === 'submitted' || attempt.status === 'expired');
 
+  const opponent = players.find((player) => player.id !== (profile?.id ?? ''));
+  const myResultAttempt = resultRoundAttempts.find((attempt) => attempt.player_id === (profile?.id ?? ''));
+  const opponentResultAttempt = opponent ? resultRoundAttempts.find((attempt) => attempt.player_id === opponent.id) : undefined;
+
+  const uiState: 'idle' | 'playing' | 'expired' | 'submitted' | 'resolved' | 'game_over' =
+    gameStatus === 'finished'
+      ? 'game_over'
+      : showResultPanel
+        ? 'resolved'
+        : myAttempt?.status === 'pending'
+          ? 'idle'
+          : myAttempt?.status === 'started'
+            ? (clock > 0 ? 'playing' : 'expired')
+            : myAttempt?.status === 'submitted'
+              ? 'submitted'
+              : myAttempt?.status === 'expired'
+                ? 'expired'
+                : 'idle';
+
+  const shouldShowRoundContent = uiState === 'playing' || uiState === 'expired' || uiState === 'submitted';
+
   const totalsByPlayer = allGameAttempts.reduce<Record<string, number>>((acc, attempt) => {
     acc[attempt.player_id] = (acc[attempt.player_id] ?? 0) + (attempt.points ?? 0);
     return acc;
@@ -482,7 +502,7 @@ export function GamePage() {
     return <main className="p-4">Profil absent.</main>;
   }
 
-  if (gameStatus === 'finished') {
+  if (uiState === 'game_over') {
     const sortedFinal = players
       .map((player) => ({
         ...player,
@@ -518,21 +538,24 @@ export function GamePage() {
         <p className="text-3xl font-black tracking-widest">{gameCode || '...'}</p>
       </section>
 
-      {showResultPanel ? (
+      {uiState === 'resolved' ? (
         <section className="card">
           <h2 className="font-bold">Résultat manche {displayedResultRoundIndex! + 1}</h2>
           <div className="mt-3 space-y-2">
-            {players.map((player) => {
-              const attempt = resultRoundAttempts.find((row) => row.player_id === player.id);
-              return (
-                <div key={player.id} className="rounded-lg bg-slate-800 px-3 py-2">
-                  <p className="font-semibold">{player.pseudo}</p>
-                  <p className="text-sm text-slate-300">Réponse : {attempt?.answer_text ?? '—'}</p>
-                  <p className="text-sm">Points manche : <strong>{attempt?.points ?? 0}</strong></p>
-                  <p className="text-sm">Total : <strong>{totalsByPlayer[player.id] ?? 0}</strong></p>
-                </div>
-              );
-            })}
+            <div className="rounded-lg bg-slate-800 px-3 py-2">
+              <p className="font-semibold">Toi</p>
+              <p className="text-sm text-slate-300">Mot : {myResultAttempt?.answer_text ?? '—'}</p>
+              <p className="text-sm">Points manche : <strong>{myResultAttempt?.points ?? 0}</strong></p>
+            </div>
+            <div className="rounded-lg bg-slate-800 px-3 py-2">
+              <p className="font-semibold">Adversaire{opponent ? ` (${opponent.pseudo})` : ''}</p>
+              <p className="text-sm text-slate-300">Mot : {opponentResultAttempt?.answer_text ?? '—'}</p>
+              <p className="text-sm">Points manche : <strong>{opponentResultAttempt?.points ?? 0}</strong></p>
+            </div>
+            <div className="rounded-lg border border-slate-700 px-3 py-2">
+              <p className="text-sm">Score cumulé — Toi : <strong>{myScore}</strong> pts</p>
+              <p className="text-sm">Score cumulé — Adversaire : <strong>{opponent ? totalsByPlayer[opponent.id] ?? 0 : 0}</strong> pts</p>
+            </div>
           </div>
           <button className="btn-primary mt-3" onClick={goToNextRound}>Manche suivante</button>
         </section>
@@ -544,9 +567,9 @@ export function GamePage() {
           <span className="rounded-full bg-slate-800 border border-slate-700 px-3 py-1 text-sm font-bold text-brand-500">{clock}s</span>
         </div>
 
-        {canStart ? <button className="btn-primary" onClick={onStartRound}>Démarrer</button> : null}
+        {uiState === 'idle' ? <button className="btn-primary" onClick={onStartRound}>Démarrer</button> : null}
 
-        {myAttempt && myAttempt.status !== 'pending' ? (
+        {myAttempt && shouldShowRoundContent ? (
           <>
             {round?.round_type === 'letters' ? (
               <>
@@ -682,7 +705,7 @@ export function GamePage() {
 
             <button
               className="btn-primary"
-              disabled={round?.round_type === 'letters' ? !isStarted || clock <= 0 : !canSubmitNumbers}
+              disabled={uiState !== 'playing' || (round?.round_type === 'letters' ? false : !canSubmitNumbers)}
               onClick={onSubmit}
             >
               Valider
@@ -690,26 +713,22 @@ export function GamePage() {
           </>
         ) : null}
 
-        {isTimeUpWithoutSubmit ? (
+        {uiState === 'expired' ? (
           <div className="flex items-center justify-between rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2">
             <p className="text-xs text-amber-300">Temps écoulé — en attente de l'adversaire</p>
             <button className="text-xs underline text-amber-200" onClick={onPass}>Passer</button>
           </div>
         ) : null}
 
-        {isFinished ? (
+        {uiState === 'submitted' ? (
           <p className="text-emerald-400 text-sm">Manche terminée. Attends l’autre joueur pour débloquer la suite.</p>
         ) : null}
       </section>
 
       <section className="card">
         <h2 className="font-bold">Score</h2>
-        <div className="space-y-1">
-          {players.map((player) => (
-            <p key={player.id}>{player.pseudo} : <strong>{totalsByPlayer[player.id] ?? 0}</strong> pts</p>
-          ))}
-        </div>
-        <p className="text-sm text-slate-400 mt-2">Ton total : {myScore} pts</p>
+        <p>Toi : <strong>{myScore}</strong> pts</p>
+        <p>Adversaire : <strong>{opponent ? totalsByPlayer[opponent.id] ?? 0 : 0}</strong> pts</p>
       </section>
 
       <button
