@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { createGame, fetchGameBundle, joinGame, startRound, submitLetters, submitNumbers } from '../lib/gameApi';
 import { normalizeWord } from '../lib/normalize';
@@ -47,6 +47,36 @@ const vibrateLight = () => {
   }
 };
 
+const playBeep = () => {
+  if (typeof window === 'undefined') return;
+
+  try {
+    const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+
+    const ctx = new AudioCtx();
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    oscillator.type = 'sine';
+    oscillator.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
+
+    oscillator.connect(gain);
+    gain.connect(ctx.destination);
+    oscillator.start();
+    oscillator.stop(ctx.currentTime + 0.12);
+
+    window.setTimeout(() => {
+      ctx.close().catch(() => undefined);
+    }, 200);
+  } catch {
+    // Audio blocked by browser -> fail silently.
+  }
+};
+
 export function GamePage() {
   const { gameId = '' } = useParams();
   const navigate = useNavigate();
@@ -66,6 +96,8 @@ export function GamePage() {
   const [dismissedResultRound, setDismissedResultRound] = useState<number | null>(null);
   const [realtimeError, setRealtimeError] = useState('');
   const [lastRealtimeEventAt, setLastRealtimeEventAt] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [tenSecondFlash, setTenSecondFlash] = useState(false);
 
   const [letterTiles, setLetterTiles] = useState<LetterTile[]>([]);
   const [letterOrder, setLetterOrder] = useState<string[]>([]);
@@ -81,6 +113,10 @@ export function GamePage() {
   const [calcStep, setCalcStep] = useState<CalcStep>('pick_first');
   const [firstTileId, setFirstTileId] = useState<string | null>(null);
   const [operation, setOperation] = useState<CalcOp | null>(null);
+
+  const prevClockRef = useRef<number | null>(null);
+  const tenSecondAlertAttemptRef = useRef<string | null>(null);
+  const autoSubmitAttemptRef = useRef<string | null>(null);
 
   const myAttempt = attempts.find((a) => a.round_id === rounds[currentRoundIndex]?.id);
   const round = rounds[currentRoundIndex];
@@ -186,6 +222,7 @@ export function GamePage() {
   useEffect(() => {
     if (!myAttempt?.deadline_at) {
       setClock(0);
+      prevClockRef.current = null;
       return;
     }
     setClock(secondsLeft(myAttempt.deadline_at));
@@ -194,6 +231,21 @@ export function GamePage() {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [myAttempt?.deadline_at]);
+
+  useEffect(() => {
+    if (!myAttempt?.id || myAttempt.status !== 'started') return;
+
+    const previousClock = prevClockRef.current;
+    const crossedTenSeconds = previousClock !== null && previousClock > 10 && clock <= 10 && clock > 0;
+    if (crossedTenSeconds && tenSecondAlertAttemptRef.current !== myAttempt.id) {
+      tenSecondAlertAttemptRef.current = myAttempt.id;
+      setTenSecondFlash(true);
+      playBeep();
+      window.setTimeout(() => setTenSecondFlash(false), 1600);
+    }
+
+    prevClockRef.current = clock;
+  }, [clock, myAttempt?.id, myAttempt?.status]);
 
   useEffect(() => {
     if (round?.round_type !== 'numbers') return;
@@ -222,34 +274,82 @@ export function GamePage() {
     setDismissedResultRound(null);
   }, [currentRoundIndex]);
 
+  useEffect(() => {
+    if (!myAttempt?.id) return;
+    if (myAttempt.status !== 'started') {
+      autoSubmitAttemptRef.current = null;
+    }
+  }, [myAttempt?.id, myAttempt?.status]);
+
   const onStartRound = async () => {
     if (!myAttempt) return;
     await startRound(myAttempt.id);
     await refresh();
   };
 
-  const onSubmit = async () => {
-    if (!myAttempt || !round || !isStarted || isFinished) return;
-    vibrateLight();
+  const submitCurrentAnswer = async (auto = false) => {
+    if (!myAttempt || !round || !isStarted || isFinished || isSubmitting) return false;
 
-    if (round.round_type === 'letters') {
-      if (!letterValidation.valid) {
-        return;
-      }
-
-      setLetterSubmitError('');
-      const result = await submitLetters(myAttempt.id, composedWord);
-      if (result.status === 'invalid') {
-        setLetterSubmitError('Mot invalide (hors dictionnaire).');
-        return;
-      }
-      setSelectedLetterIds([]);
-    } else {
-      await submitNumbers(myAttempt.id, calcFinalValue, calcTrace || `Résultat final: ${String(calcFinalValue)}`);
+    setIsSubmitting(true);
+    if (!auto) {
+      vibrateLight();
     }
 
-    await refresh();
+    try {
+      if (round.round_type === 'letters') {
+        if (!auto && !letterValidation.valid) {
+          return false;
+        }
+
+        setLetterSubmitError('');
+        const firstAnswer = normalizeWord(composedWord).length > 0 ? composedWord : '';
+        const result = await submitLetters(myAttempt.id, firstAnswer);
+        if (result.status === 'invalid') {
+          if (auto) {
+            await submitLetters(myAttempt.id, '');
+          } else {
+            setLetterSubmitError('Mot invalide (hors dictionnaire).');
+            return false;
+          }
+        }
+        setSelectedLetterIds([]);
+      } else {
+        const hasPlayableCurrent = calcFinalValue !== null && calcHistory.length > 0;
+        if (auto) {
+          if (hasPlayableCurrent) {
+            await submitNumbers(myAttempt.id, calcFinalValue, calcTrace || `Résultat final: ${String(calcFinalValue)}`);
+          } else {
+            await submitNumbers(myAttempt.id, null, 'Passé (temps écoulé)');
+          }
+        } else {
+          await submitNumbers(myAttempt.id, calcFinalValue, calcTrace || `Résultat final: ${String(calcFinalValue)}`);
+        }
+      }
+
+      await refresh();
+      return true;
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  const onSubmit = async () => {
+    if (!myAttempt || !round || !isStarted || isFinished) return;
+    await submitCurrentAnswer(false);
+  };
+
+  useEffect(() => {
+    if (!myAttempt || !round) return;
+    if (myAttempt.status !== 'started' || clock > 0 || isFinished) return;
+    if (autoSubmitAttemptRef.current === myAttempt.id) return;
+
+    autoSubmitAttemptRef.current = myAttempt.id;
+    submitCurrentAnswer(true).catch((err) => {
+      setError((err as Error).message);
+      autoSubmitAttemptRef.current = null;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clock, myAttempt?.id, myAttempt?.status, round?.id]);
 
   const onPass = async () => {
     if (!myAttempt || !round || !isTimeUpWithoutSubmit || isFinished) return;
@@ -573,8 +673,22 @@ export function GamePage() {
       <section className="card flex flex-col gap-3">
         <div className="flex items-center justify-between gap-2">
           <h2 className="font-bold text-base">{roundTitle}</h2>
-          <span className="rounded-full bg-slate-800 border border-slate-700 px-3 py-1 text-sm font-bold text-brand-500">{clock}s</span>
+          <span
+            className={`rounded-full border px-3 py-1 text-sm font-bold transition ${
+              uiState === 'playing' && clock <= 10 && clock > 0
+                ? 'border-rose-400 bg-rose-500/20 text-rose-200 animate-pulse'
+                : 'bg-slate-800 border-slate-700 text-brand-500'
+            }`}
+          >
+            {clock}s
+          </span>
         </div>
+
+        {tenSecondFlash ? (
+          <div className="rounded-md border border-rose-400/40 bg-rose-500/10 px-3 py-1">
+            <p className="text-xs font-semibold text-rose-200">⚠️ 10 secondes !</p>
+          </div>
+        ) : null}
 
         {uiState === 'idle' ? <button className="btn-primary" onClick={onStartRound}>Démarrer</button> : null}
 
@@ -714,10 +828,10 @@ export function GamePage() {
 
             <button
               className="btn-primary"
-              disabled={uiState !== 'playing' || (round?.round_type === 'letters' ? false : !canSubmitNumbers)}
+              disabled={isSubmitting || uiState !== 'playing' || (round?.round_type === 'letters' ? false : !canSubmitNumbers)}
               onClick={onSubmit}
             >
-              Valider
+              {isSubmitting ? 'Envoi...' : 'Valider'}
             </button>
           </>
         ) : null}
