@@ -105,6 +105,14 @@ export function GamePage() {
     setAutoSubmitLogs((prev) => [...prev.slice(-5), `${new Date().toLocaleTimeString()} · ${message}`]);
   };
 
+  const resetRoundUiFeedback = () => {
+    setError('');
+    setLetterSubmitError('');
+    setCalcError('');
+    setAutoSubmitLogs([]);
+    setTenSecondFlash(false);
+  };
+
   const ensureAudioUnlocked = async () => {
     const unlocked = await sfxRef.current.unlock();
     if (unlocked) {
@@ -254,6 +262,7 @@ export function GamePage() {
 
   useEffect(() => {
     if (round?.round_type !== 'numbers') return;
+    resetRoundUiFeedback();
     setCalcTiles(initCalcTiles(round.payload.numbers));
     setCalcHistory([]);
     setCalcTrace('');
@@ -267,6 +276,7 @@ export function GamePage() {
 
   useEffect(() => {
     if (round?.round_type !== 'letters') return;
+    resetRoundUiFeedback();
     const tiles = initLetterTiles(round.payload.letters);
     setLetterTiles(tiles);
     setLetterOrder(tiles.map((tile) => tile.id));
@@ -289,6 +299,7 @@ export function GamePage() {
 
   const onStartRound = async () => {
     if (!myAttempt) return;
+    resetRoundUiFeedback();
     await ensureAudioUnlocked();
     await startRound(myAttempt.id);
     await refresh();
@@ -341,8 +352,8 @@ export function GamePage() {
             pushAutoSubmitLog(`AUTO-SUBMIT fired (numbers), result=${String(finalValue)} trace="${trace || ''}"`);
             await submitNumbers(myAttempt.id, finalValue, trace || `Résultat final: ${String(finalValue)}`);
           } else {
-            pushAutoSubmitLog('AUTO-SUBMIT fired (numbers), aucun calcul -> pass');
-            await submitNumbers(myAttempt.id, null, 'Passé (temps écoulé)');
+            pushAutoSubmitLog('AUTO-SUBMIT fired (numbers), PASS (no ops)');
+            await submitNumbers(myAttempt.id, null, null);
           }
         } else {
           await submitNumbers(myAttempt.id, calcFinalValue, calcTrace || `Résultat final: ${String(calcFinalValue)}`);
@@ -397,10 +408,11 @@ export function GamePage() {
 
   const onPass = async () => {
     if (!myAttempt || !round || !isTimeUpWithoutSubmit || isFinished) return;
+    resetRoundUiFeedback();
     if (round.round_type === 'letters') {
       await submitLetters(myAttempt.id, '');
     } else {
-      await submitNumbers(myAttempt.id, null, 'Passé (temps écoulé)');
+      await submitNumbers(myAttempt.id, null, null);
     }
     await refresh();
   };
@@ -668,6 +680,7 @@ export function GamePage() {
   }, {});
 
   const goToNextRound = () => {
+    resetRoundUiFeedback();
     setDismissedResultRound(displayedResultRoundIndex);
     refresh().catch(() => undefined);
   };

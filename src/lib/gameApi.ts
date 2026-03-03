@@ -61,11 +61,11 @@ export const submitLetters = async (attemptId: string, answer: string) => {
   return data as { points: number; status: 'submitted' | 'expired' | 'invalid'; answer_text?: string };
 };
 
-export const submitNumbers = async (attemptId: string, finalValue: number | null, trace: string) => {
+export const submitNumbers = async (attemptId: string, finalValue: number | null, trace?: string | null) => {
   const { data, error } = await supabase.rpc('submit_numbers_attempt', {
     p_attempt_id: attemptId,
     p_result: finalValue,
-    p_expression: trace,
+    p_expression: trace ?? null,
   });
   if (error) throw error;
   return data as { points: number; computed_value: number; status: string };

@@ -487,6 +487,18 @@ begin
     return jsonb_build_object('points', 0, 'status', 'expired', 'computed_value', null);
   end if;
 
+  if p_result is null and (p_expression is null or btrim(p_expression) = '' or upper(btrim(p_expression)) = 'PASS') then
+    update attempts
+    set answer_text = 'PASS',
+        answer_value = null,
+        points = 0,
+        status = 'submitted'
+    where id = p_attempt_id;
+
+    perform advance_round_if_ready(a.game_id);
+    return jsonb_build_object('points', 0, 'status', 'submitted', 'computed_value', null, 'answer_text', 'PASS');
+  end if;
+
   if p_result is not null then
     computed := p_result;
   else
