@@ -4,6 +4,7 @@ import { createGame, fetchGameBundle, joinGame, startRound, submitLetters, submi
 import { normalizeWord } from '../lib/normalize';
 import { readProfile } from '../lib/profile';
 import { supabase } from '../lib/supabase';
+import { createSfxController } from '../lib/sfx';
 import type { AttemptRow, RoundRow } from '../types';
 
 type CalcTile = { id: string; value: number };
@@ -33,6 +34,11 @@ const initCalcTiles = (numbers: number[] = []) =>
 const initLetterTiles = (letters: string[] = []) =>
   letters.map((letter, idx) => ({ id: `l-${idx}-${letter}`, letter }));
 
+const buildWordFromIds = (ids: string[], tiles: LetterTile[]) => {
+  const byId = new Map(tiles.map((tile) => [tile.id, tile.letter]));
+  return ids.map((id) => byId.get(id) ?? '').join('');
+};
+
 const applyOperation = (a: number, b: number, op: CalcOp) => {
   if (op === '+') return { ok: true, value: a + b } as const;
   if (op === '-') return { ok: true, value: a - b } as const;
@@ -47,35 +53,6 @@ const vibrateLight = () => {
   }
 };
 
-const playBeep = () => {
-  if (typeof window === 'undefined') return;
-
-  try {
-    const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioCtx) return;
-
-    const ctx = new AudioCtx();
-    const oscillator = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    oscillator.type = 'sine';
-    oscillator.frequency.value = 880;
-    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
-
-    oscillator.connect(gain);
-    gain.connect(ctx.destination);
-    oscillator.start();
-    oscillator.stop(ctx.currentTime + 0.12);
-
-    window.setTimeout(() => {
-      ctx.close().catch(() => undefined);
-    }, 200);
-  } catch {
-    // Audio blocked by browser -> fail silently.
-  }
-};
 
 export function GamePage() {
   const { gameId = '' } = useParams();
@@ -98,6 +75,9 @@ export function GamePage() {
   const [lastRealtimeEventAt, setLastRealtimeEventAt] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [tenSecondFlash, setTenSecondFlash] = useState(false);
+  const [audioMuted, setAudioMuted] = useState(false);
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [autoSubmitLogs, setAutoSubmitLogs] = useState<string[]>([]);
 
   const [letterTiles, setLetterTiles] = useState<LetterTile[]>([]);
   const [letterOrder, setLetterOrder] = useState<string[]>([]);
@@ -115,8 +95,31 @@ export function GamePage() {
   const [operation, setOperation] = useState<CalcOp | null>(null);
 
   const prevClockRef = useRef<number | null>(null);
+  const previousClockForAutoRef = useRef<number | null>(null);
   const tenSecondAlertAttemptRef = useRef<string | null>(null);
   const autoSubmitAttemptRef = useRef<string | null>(null);
+  const winSoundRoundRef = useRef<string | null>(null);
+  const sfxRef = useRef(createSfxController());
+
+  const pushAutoSubmitLog = (message: string) => {
+    setAutoSubmitLogs((prev) => [...prev.slice(-5), `${new Date().toLocaleTimeString()} · ${message}`]);
+  };
+
+  const ensureAudioUnlocked = async () => {
+    const unlocked = await sfxRef.current.unlock();
+    if (unlocked) {
+      setAudioUnlocked(true);
+    }
+    return unlocked;
+  };
+
+  const playSfx = (preset: Parameters<typeof sfxRef.current.play>[0]) => {
+    if (audioMuted) return;
+    const ok = sfxRef.current.play(preset);
+    if (ok) {
+      setAudioUnlocked(true);
+    }
+  };
 
   const myAttempt = attempts.find((a) => a.round_id === rounds[currentRoundIndex]?.id);
   const round = rounds[currentRoundIndex];
@@ -135,10 +138,7 @@ export function GamePage() {
   const target = round?.payload.target ?? 0;
   const liveGap = calcFinalValue === null ? '-' : Math.abs(target - calcFinalValue);
 
-  const composedWord = useMemo(() => {
-    const byId = new Map(letterTiles.map((tile) => [tile.id, tile.letter]));
-    return selectedLetterIds.map((id) => byId.get(id) ?? '').join('');
-  }, [letterTiles, selectedLetterIds]);
+  const composedWord = useMemo(() => buildWordFromIds(selectedLetterIds, letterTiles), [letterTiles, selectedLetterIds]);
 
   const normalizedWord = useMemo(() => normalizeWord(composedWord), [composedWord]);
 
@@ -223,6 +223,7 @@ export function GamePage() {
     if (!myAttempt?.deadline_at) {
       setClock(0);
       prevClockRef.current = null;
+      previousClockForAutoRef.current = null;
       return;
     }
     setClock(secondsLeft(myAttempt.deadline_at));
@@ -240,12 +241,16 @@ export function GamePage() {
     if (crossedTenSeconds && tenSecondAlertAttemptRef.current !== myAttempt.id) {
       tenSecondAlertAttemptRef.current = myAttempt.id;
       setTenSecondFlash(true);
-      playBeep();
+      playSfx('timer');
       window.setTimeout(() => setTenSecondFlash(false), 1600);
     }
 
     prevClockRef.current = clock;
   }, [clock, myAttempt?.id, myAttempt?.status]);
+
+  useEffect(() => {
+    sfxRef.current.setMuted(audioMuted);
+  }, [audioMuted]);
 
   useEffect(() => {
     if (round?.round_type !== 'numbers') return;
@@ -278,20 +283,26 @@ export function GamePage() {
     if (!myAttempt?.id) return;
     if (myAttempt.status !== 'started') {
       autoSubmitAttemptRef.current = null;
+      previousClockForAutoRef.current = null;
     }
   }, [myAttempt?.id, myAttempt?.status]);
 
   const onStartRound = async () => {
     if (!myAttempt) return;
+    await ensureAudioUnlocked();
     await startRound(myAttempt.id);
     await refresh();
   };
 
-  const submitCurrentAnswer = async (auto = false) => {
+  const submitCurrentAnswer = async (
+    auto = false,
+    overrides?: { lettersWord?: string; numbersValue?: number | null; numbersTrace?: string; numbersHasHistory?: boolean }
+  ) => {
     if (!myAttempt || !round || !isStarted || isFinished || isSubmitting) return false;
 
     setIsSubmitting(true);
     if (!auto) {
+      await ensureAudioUnlocked();
       vibrateLight();
     }
 
@@ -302,10 +313,18 @@ export function GamePage() {
         }
 
         setLetterSubmitError('');
-        const firstAnswer = normalizeWord(composedWord).length > 0 ? composedWord : '';
+        const autoWord = overrides?.lettersWord ?? composedWord;
+        const firstAnswer = normalizeWord(autoWord).length > 0 ? autoWord : '';
+        if (auto) {
+          pushAutoSubmitLog(`AUTO-SUBMIT fired (letters), mot="${firstAnswer || '(vide)'}"`);
+        }
         const result = await submitLetters(myAttempt.id, firstAnswer);
+        if (auto) {
+          pushAutoSubmitLog(`AUTO-SUBMIT letters RPC status=${result.status} points=${result.points}`);
+        }
         if (result.status === 'invalid') {
           if (auto) {
+            pushAutoSubmitLog('AUTO-SUBMIT letters invalid -> fallback vide');
             await submitLetters(myAttempt.id, '');
           } else {
             setLetterSubmitError('Mot invalide (hors dictionnaire).');
@@ -314,11 +333,15 @@ export function GamePage() {
         }
         setSelectedLetterIds([]);
       } else {
-        const hasPlayableCurrent = calcFinalValue !== null && calcHistory.length > 0;
+        const hasPlayableCurrent = overrides?.numbersHasHistory ?? (calcFinalValue !== null && calcHistory.length > 0);
+        const finalValue = overrides?.numbersValue ?? calcFinalValue;
+        const trace = overrides?.numbersTrace ?? calcTrace;
         if (auto) {
           if (hasPlayableCurrent) {
-            await submitNumbers(myAttempt.id, calcFinalValue, calcTrace || `Résultat final: ${String(calcFinalValue)}`);
+            pushAutoSubmitLog(`AUTO-SUBMIT fired (numbers), result=${String(finalValue)} trace="${trace || ''}"`);
+            await submitNumbers(myAttempt.id, finalValue, trace || `Résultat final: ${String(finalValue)}`);
           } else {
+            pushAutoSubmitLog('AUTO-SUBMIT fired (numbers), aucun calcul -> pass');
             await submitNumbers(myAttempt.id, null, 'Passé (temps écoulé)');
           }
         } else {
@@ -339,17 +362,38 @@ export function GamePage() {
   };
 
   useEffect(() => {
-    if (!myAttempt || !round) return;
-    if (myAttempt.status !== 'started' || clock > 0 || isFinished) return;
-    if (autoSubmitAttemptRef.current === myAttempt.id) return;
+    if (!myAttempt || !round || myAttempt.status !== 'started' || isFinished) {
+      return;
+    }
 
+    const previous = previousClockForAutoRef.current;
+    const crossedZero = previous === null ? clock <= 0 : previous > 0 && clock <= 0;
+    previousClockForAutoRef.current = clock;
+
+    if (!crossedZero) {
+      return;
+    }
+
+    if (autoSubmitAttemptRef.current === myAttempt.id || isSubmitting) return;
     autoSubmitAttemptRef.current = myAttempt.id;
-    submitCurrentAnswer(true).catch((err) => {
+
+    const snapshotWord = round.round_type === 'letters' ? buildWordFromIds(selectedLetterIds, letterTiles) : '';
+    const snapshotResult = calcFinalValue;
+    const snapshotTrace = calcTrace;
+    const snapshotHasHistory = calcHistory.length > 0;
+
+    submitCurrentAnswer(true, {
+      lettersWord: snapshotWord,
+      numbersValue: snapshotResult,
+      numbersTrace: snapshotTrace,
+      numbersHasHistory: snapshotHasHistory,
+    }).catch((err) => {
       setError((err as Error).message);
+      pushAutoSubmitLog(`AUTO-SUBMIT error: ${(err as Error).message}`);
       autoSubmitAttemptRef.current = null;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clock, myAttempt?.id, myAttempt?.status, round?.id]);
+  }, [clock, myAttempt?.id, myAttempt?.status, round?.id, selectedLetterIds, letterTiles, calcFinalValue, calcTrace, calcHistory.length, isSubmitting]);
 
   const onPass = async () => {
     if (!myAttempt || !round || !isTimeUpWithoutSubmit || isFinished) return;
@@ -364,14 +408,18 @@ export function GamePage() {
   const onLetterTileClick = (tileId: string) => {
     if (inputDisabled || round?.round_type !== 'letters') return;
     if (selectedLetterIds.includes(tileId)) return;
+    ensureAudioUnlocked().catch(() => undefined);
     vibrateLight();
+    playSfx('tick');
     setLetterSubmitError('');
     setSelectedLetterIds((prev) => [...prev, tileId]);
   };
 
   const onWordTileClick = (tileId: string, index: number) => {
     if (inputDisabled || round?.round_type !== 'letters') return;
+    ensureAudioUnlocked().catch(() => undefined);
     vibrateLight();
+    playSfx('tick');
     setSelectedLetterIds((prev) => {
       if (prev[index] !== tileId) return prev;
       return prev.filter((_, idx) => idx !== index);
@@ -381,21 +429,27 @@ export function GamePage() {
 
   const onBackspace = () => {
     if (inputDisabled || selectedLetterIds.length === 0) return;
+    ensureAudioUnlocked().catch(() => undefined);
     vibrateLight();
+    playSfx('tick');
     setSelectedLetterIds((prev) => prev.slice(0, -1));
     setLetterSubmitError('');
   };
 
   const onClearWord = () => {
     if (inputDisabled || selectedLetterIds.length === 0) return;
+    ensureAudioUnlocked().catch(() => undefined);
     vibrateLight();
+    playSfx('tick');
     setSelectedLetterIds([]);
     setLetterSubmitError('');
   };
 
   const onShuffleLetters = () => {
     if (inputDisabled || round?.round_type !== 'letters') return;
+    ensureAudioUnlocked().catch(() => undefined);
     vibrateLight();
+    playSfx('neutral');
     setLetterOrder((prev) => {
       const next = [...prev];
       for (let i = next.length - 1; i > 0; i -= 1) {
@@ -409,6 +463,8 @@ export function GamePage() {
   };
 
   const clearSelection = () => {
+    ensureAudioUnlocked().catch(() => undefined);
+    playSfx('tick');
     setCalcStep('pick_first');
     setFirstTileId(null);
     setOperation(null);
@@ -418,6 +474,8 @@ export function GamePage() {
   const selectOperation = (op: CalcOp) => {
     if (inputDisabled || round?.round_type !== 'numbers') return;
     if (calcStep !== 'pick_operation') return;
+    ensureAudioUnlocked().catch(() => undefined);
+    playSfx('tick');
     setOperation(op);
     setCalcStep('pick_second');
     setCalcError('');
@@ -425,6 +483,8 @@ export function GamePage() {
 
   const onTileClick = (tileId: string) => {
     if (inputDisabled || round?.round_type !== 'numbers') return;
+    ensureAudioUnlocked().catch(() => undefined);
+    playSfx('tick');
 
     if (calcStep === 'pick_first') {
       setFirstTileId(tileId);
@@ -486,11 +546,14 @@ export function GamePage() {
       setFirstTileId(null);
       setOperation(null);
       setCalcError('');
+      playSfx('neutral');
     }
   };
 
   const undoLast = () => {
     if (inputDisabled || calcUndoStack.length === 0) return;
+    ensureAudioUnlocked().catch(() => undefined);
+    playSfx('tick');
     const previous = calcUndoStack[calcUndoStack.length - 1];
     setCalcUndoStack((stack) => stack.slice(0, -1));
     setCalcTiles(previous.tiles);
@@ -505,6 +568,8 @@ export function GamePage() {
 
   const restartCalc = () => {
     if (round?.round_type !== 'numbers') return;
+    ensureAudioUnlocked().catch(() => undefined);
+    playSfx('neutral');
     setCalcTiles(initCalcTiles(round.payload.numbers));
     setCalcHistory([]);
     setCalcTrace('');
@@ -574,6 +639,20 @@ export function GamePage() {
                 : 'idle';
 
   const shouldShowRoundContent = uiState === 'playing' || uiState === 'expired' || uiState === 'submitted';
+
+  useEffect(() => {
+    if (uiState !== 'resolved' || !resultRound?.id) return;
+    if (winSoundRoundRef.current === resultRound.id) return;
+    if (!myResultAttempt || !opponentResultAttempt) return;
+
+    winSoundRoundRef.current = resultRound.id;
+    if (myResultAttempt.points > opponentResultAttempt.points) {
+      playSfx('win');
+    } else if (myResultAttempt.points === opponentResultAttempt.points) {
+      playSfx('neutral');
+    }
+  }, [uiState, resultRound?.id, myResultAttempt, opponentResultAttempt]);
+
   const debugMode = useMemo(() => {
     const fromQuery = new URLSearchParams(location.search).get('debug') === '1';
     const fromStorage = localStorage.getItem('DEBUG') === 'true';
@@ -673,21 +752,41 @@ export function GamePage() {
       <section className="card flex flex-col gap-3">
         <div className="flex items-center justify-between gap-2">
           <h2 className="font-bold text-base">{roundTitle}</h2>
-          <span
-            className={`rounded-full border px-3 py-1 text-sm font-bold transition ${
-              uiState === 'playing' && clock <= 10 && clock > 0
-                ? 'border-rose-400 bg-rose-500/20 text-rose-200 animate-pulse'
-                : 'bg-slate-800 border-slate-700 text-brand-500'
-            }`}
-          >
-            {clock}s
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-full border border-slate-700 px-2 py-1 text-xs"
+              onClick={async () => {
+                if (audioMuted) {
+                  const unlocked = await ensureAudioUnlocked();
+                  if (!unlocked) return;
+                }
+                setAudioMuted((prev) => !prev);
+              }}
+              title={audioMuted ? 'Son désactivé' : audioUnlocked ? 'Son activé' : 'Touchez pour activer le son'}
+            >
+              {audioMuted ? '🔇' : audioUnlocked ? '🔈' : '🔈⛔'}
+            </button>
+            <span
+              className={`rounded-full border px-3 py-1 text-sm font-bold transition ${
+                uiState === 'playing' && clock <= 10 && clock > 0
+                  ? 'border-rose-400 bg-rose-500/20 text-rose-200 animate-pulse'
+                  : 'bg-slate-800 border-slate-700 text-brand-500'
+              }`}
+            >
+              {clock}s
+            </span>
+          </div>
         </div>
 
         {tenSecondFlash ? (
           <div className="rounded-md border border-rose-400/40 bg-rose-500/10 px-3 py-1">
             <p className="text-xs font-semibold text-rose-200">⚠️ 10 secondes !</p>
           </div>
+        ) : null}
+
+        {!audioMuted && !audioUnlocked ? (
+          <p className="text-[11px] text-slate-400">Audio bloqué par le navigateur: touche l’écran pour activer le son.</p>
         ) : null}
 
         {uiState === 'idle' ? <button className="btn-primary" onClick={onStartRound}>Démarrer</button> : null}
@@ -870,8 +969,14 @@ export function GamePage() {
           <p>opponentId: {opponent?.id ?? '—'}</p>
           <p>attempts total chargées: {allGameAttempts.length}</p>
           <p>attempts manche courante: {currentRoundAttempts.length}</p>
+          <p>audio unlocked: {audioUnlocked ? 'yes' : 'no'}</p>
+          <p>audio muted: {audioMuted ? 'yes' : 'no'}</p>
           <p>last realtime event: {lastRealtimeEventAt || '—'}</p>
           <p>realtime error: {realtimeError || 'none'}</p>
+          <p className="mt-2 font-semibold">auto-submit logs</p>
+          <ul className="space-y-1">
+            {autoSubmitLogs.length === 0 ? <li>—</li> : autoSubmitLogs.map((line, idx) => <li key={`${line}-${idx}`}>{line}</li>)}
+          </ul>
           <ul className="mt-2 space-y-1">
             {currentRoundAttempts.map((attempt) => (
               <li key={attempt.id}>
