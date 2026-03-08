@@ -1,6 +1,6 @@
 import { ChangeEvent, FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createGame, ensurePlayer, joinGame } from '../lib/gameApi';
+import { createGame, createSoloGame, ensurePlayer, joinGame } from '../lib/gameApi';
 import { readProfile, saveProfile } from '../lib/profile';
 
 export function HomePage() {
@@ -25,6 +25,21 @@ export function HomePage() {
     try {
       const player = await withPlayer();
       const result = await createGame(player.id);
+      navigate(`/game/${result.game_id}`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onCreateSolo = async (event: FormEvent) => {
+    event.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const player = await withPlayer();
+      const result = await createSoloGame(player.id);
       navigate(`/game/${result.game_id}`);
     } catch (err) {
       setError((err as Error).message);
@@ -61,7 +76,7 @@ export function HomePage() {
         <p className="text-slate-300 mt-2">Jeu asynchrone à 2 joueurs avec chrono strict par manche.</p>
       </section>
 
-      <form onSubmit={onCreate} className="card flex flex-col gap-3">
+      <form onSubmit={onCreateSolo} className="card flex flex-col gap-3">
         <label className="text-sm">Ton pseudo</label>
         <input
           className="rounded-xl bg-slate-800 border border-slate-700 px-3 py-3"
@@ -70,6 +85,11 @@ export function HomePage() {
           placeholder="Ex: Alex"
           maxLength={24}
         />
+        <button className="btn-primary" disabled={loading}>Lancer en solo</button>
+      </form>
+
+      <form onSubmit={onCreate} className="card flex flex-col gap-3">
+        <p className="text-sm text-slate-300">Mode duo</p>
         <button className="btn-primary" disabled={loading}>Créer une partie</button>
       </form>
 

@@ -40,10 +40,18 @@ create table if not exists games (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,
   created_by uuid not null references players(id),
+  mode text not null default 'duo' check (mode in ('duo', 'solo')),
   status text not null default 'waiting' check (status in ('waiting', 'active', 'finished')),
   current_round_index int not null default 0,
   created_at timestamptz not null default now()
 );
+
+alter table games add column if not exists mode text;
+update games set mode = 'duo' where mode is null;
+alter table games alter column mode set default 'duo';
+alter table games alter column mode set not null;
+alter table games drop constraint if exists games_mode_check;
+alter table games add constraint games_mode_check check (mode in ('duo', 'solo'));
 
 create table if not exists game_players (
   game_id uuid not null references games(id) on delete cascade,
@@ -260,7 +268,7 @@ declare
   i int;
 begin
   select * into cfg from round_config where id = true;
-  insert into games(id, code, created_by, status, current_round_index) values (v_game_id, v_code, p_creator, 'waiting', 0);
+  insert into games(id, code, created_by, mode, status, current_round_index) values (v_game_id, v_code, p_creator, 'duo', 'waiting', 0);
   insert into game_players(game_id, player_id, seat) values (v_game_id, p_creator, 1);
 
   for i in 1..9 loop
@@ -281,6 +289,43 @@ $$;
 
 grant execute on function create_game_with_rounds(uuid) to anon, authenticated;
 
+create or replace function create_solo_game_with_rounds(p_creator uuid)
+returns jsonb language plpgsql security definer as $$
+declare
+  v_game_id uuid := gen_random_uuid();
+  v_code text := gen_game_code();
+  cfg record;
+  flow text[] := array['letters','letters','numbers','letters','letters','numbers','letters','letters','numbers'];
+  i int;
+begin
+  select * into cfg from round_config where id = true;
+  insert into games(id, code, created_by, mode, status, current_round_index) values (v_game_id, v_code, p_creator, 'solo', 'active', 0);
+  insert into game_players(game_id, player_id, seat) values (v_game_id, p_creator, 1);
+
+  for i in 1..9 loop
+    insert into rounds(game_id, round_index, round_type, payload, letters_duration_sec, numbers_duration_sec)
+    values (
+      v_game_id,
+      i - 1,
+      flow[i],
+      case when flow[i] = 'letters' then gen_letters_payload() else gen_numbers_payload() end,
+      cfg.letters_duration_sec,
+      cfg.numbers_duration_sec
+    );
+  end loop;
+
+  insert into attempts(game_id, round_id, player_id)
+  select v_game_id, r.id, p_creator
+  from rounds r
+  where r.game_id = v_game_id
+  on conflict do nothing;
+
+  return jsonb_build_object('game_id', v_game_id, 'code', v_code);
+end;
+$$;
+
+grant execute on function create_solo_game_with_rounds(uuid) to anon, authenticated;
+
 create or replace function join_game_by_code(p_player uuid, p_code text)
 returns void language plpgsql security definer as $$
 declare
@@ -288,6 +333,7 @@ declare
 begin
   select * into g from games where code = upper(trim(p_code));
   if g.id is null then raise exception 'Code invalide'; end if;
+  if g.mode = 'solo' then raise exception 'Cette partie est en mode solo'; end if;
 
   if exists(select 1 from game_players where game_id = g.id and player_id = p_player) then return; end if;
 

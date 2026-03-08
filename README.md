@@ -58,6 +58,11 @@ Ce script crée :
 - la sécurité RLS,
 - les fonctions RPC utilisées par le front.
 
+> Si tu mets à jour vers la version avec **mode solo**, relance simplement `supabase/schema.sql` :
+> - ajout de la colonne `games.mode` (`duo`/`solo`),
+> - ajout de la fonction RPC `create_solo_game_with_rounds`,
+> - correction `submit_numbers_attempt` pour accepter un PASS propre (`p_result=null`, `p_expression=null|'PASS'`).
+
 ### Étape D — Importer le dictionnaire FR (obligatoire pour la validation serveur Lettres)
 
 #### Option A (petit/moyen dictionnaire): SQL direct

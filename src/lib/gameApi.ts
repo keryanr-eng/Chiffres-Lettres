@@ -13,6 +13,12 @@ export const createGame = async (playerId: string) => {
   return data as { game_id: string; code: string };
 };
 
+export const createSoloGame = async (playerId: string) => {
+  const { data, error } = await supabase.rpc('create_solo_game_with_rounds', { p_creator: playerId });
+  if (error) throw error;
+  return data as { game_id: string; code: string };
+};
+
 export const joinGame = async (playerId: string, code: string) => {
   const { error } = await supabase.rpc('join_game_by_code', {
     p_player: playerId,

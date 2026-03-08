@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { createGame, fetchGameBundle, joinGame, startRound, submitLetters, submitNumbers } from '../lib/gameApi';
+import { createGame, createSoloGame, fetchGameBundle, joinGame, startRound, submitLetters, submitNumbers } from '../lib/gameApi';
 import { normalizeWord } from '../lib/normalize';
 import { readProfile } from '../lib/profile';
 import { supabase } from '../lib/supabase';
@@ -65,6 +65,7 @@ export function GamePage() {
   const [attempts, setAttempts] = useState<AttemptRow[]>([]);
   const [allGameAttempts, setAllGameAttempts] = useState<AttemptRow[]>([]);
   const [gameCode, setGameCode] = useState('');
+  const [gameMode, setGameMode] = useState<'duo' | 'solo'>('duo');
   const [gameStatus, setGameStatus] = useState<'waiting' | 'active' | 'finished'>('waiting');
   const [currentRoundIndex, setCurrentRoundIndex] = useState(0);
   const [clock, setClock] = useState(0);
@@ -131,6 +132,7 @@ export function GamePage() {
 
   const myAttempt = attempts.find((a) => a.round_id === rounds[currentRoundIndex]?.id);
   const round = rounds[currentRoundIndex];
+  const isSoloMode = gameMode === 'solo';
   const roundTitle = `Manche ${currentRoundIndex + 1}/9 · ${round?.round_type === 'numbers' ? 'Chiffres' : 'Lettres'}`;
 
   const isStarted = myAttempt?.status === 'started';
@@ -174,6 +176,7 @@ export function GamePage() {
     setAllGameAttempts(bundle.allAttempts);
     setPlayers(bundle.players);
     setGameCode(bundle.game.code);
+    setGameMode(bundle.game.mode ?? 'duo');
     setCurrentRoundIndex(bundle.game.current_round_index);
     setGameStatus(bundle.game.status);
     setLoading(false);
@@ -193,6 +196,7 @@ export function GamePage() {
   }, [gameId]);
 
   useEffect(() => {
+    if (isSoloMode) return;
     if (!profile) return;
     const channel = supabase
       .channel(`attempts-game-${gameId}`)
@@ -214,9 +218,9 @@ export function GamePage() {
       supabase.removeChannel(channel);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameId, profile?.id]);
+  }, [gameId, profile?.id, isSoloMode]);
 
-  const isWaitingState = !!myAttempt && (myAttempt.status === 'pending' || myAttempt.status === 'submitted' || myAttempt.status === 'expired');
+  const isWaitingState = !isSoloMode && !!myAttempt && (myAttempt.status === 'pending' || myAttempt.status === 'submitted' || myAttempt.status === 'expired');
 
   useEffect(() => {
     if (!profile || !isWaitingState) return;
@@ -609,6 +613,10 @@ export function GamePage() {
   const isRoundResolved = (roundId: string | undefined) => {
     if (!roundId) return false;
     const roundAttempts = attemptsByRoundId.get(roundId) ?? [];
+    if (isSoloMode) {
+      const mine = roundAttempts.find((attempt) => attempt.player_id === (profile?.id ?? ''));
+      return !!mine && (mine.status === 'submitted' || mine.status === 'expired');
+    }
     if (roundAttempts.length < 2) return false;
     return roundAttempts.every((attempt) => attempt.status === 'submitted' || attempt.status === 'expired');
   };
@@ -628,7 +636,7 @@ export function GamePage() {
   const showResultPanel =
     displayedResultRoundIndex !== null &&
     dismissedResultRound !== displayedResultRoundIndex &&
-    resultRoundAttempts.length >= 2 &&
+    (isSoloMode || resultRoundAttempts.length >= 2) &&
     resultRoundAttempts.some((attempt) => attempt.player_id === (profile?.id ?? ''));
 
   const opponent = players.find((player) => player.id !== (profile?.id ?? ''));
@@ -640,6 +648,8 @@ export function GamePage() {
       ? 'game_over'
       : showResultPanel
         ? 'resolved'
+        : isSoloMode && (myAttempt?.status === 'submitted' || myAttempt?.status === 'expired')
+          ? 'resolved'
         : myAttempt?.status === 'pending'
           ? 'idle'
           : myAttempt?.status === 'started'
@@ -688,10 +698,13 @@ export function GamePage() {
   const onReplay = async () => {
     if (!profile) return;
     try {
-      const newGame = await createGame(profile.id);
-      const opponent = players.find((player) => player.id !== profile.id);
-      if (opponent) {
-        await joinGame(opponent.id, newGame.code);
+      const newGame = isSoloMode ? await createSoloGame(profile.id) : await createGame(profile.id);
+
+      if (!isSoloMode) {
+        const opponent = players.find((player) => player.id !== profile.id);
+        if (opponent) {
+          await joinGame(opponent.id, newGame.code);
+        }
       }
       navigate(`/game/${newGame.game_id}`);
     } catch (err) {
@@ -704,7 +717,7 @@ export function GamePage() {
   }
 
   if (uiState === 'game_over') {
-    const sortedFinal = players
+    const sortedFinal = (isSoloMode ? players.filter((player) => player.id === profile.id) : players)
       .map((player) => ({
         ...player,
         total: totalsByPlayer[player.id] ?? 0,
@@ -734,10 +747,17 @@ export function GamePage() {
 
   return (
     <main className="mx-auto max-w-md min-h-screen p-4 flex flex-col gap-4 overflow-x-hidden">
-      <section className="card">
-        <p className="text-sm text-slate-400">Code partie à partager</p>
-        <p className="text-3xl font-black tracking-widest">{gameCode || '...'}</p>
-      </section>
+      {!isSoloMode ? (
+        <section className="card">
+          <p className="text-sm text-slate-400">Code partie à partager</p>
+          <p className="text-3xl font-black tracking-widest">{gameCode || '...'}</p>
+        </section>
+      ) : (
+        <section className="card">
+          <p className="text-sm text-brand-500 font-semibold">Mode solo</p>
+          <p className="text-slate-300 text-sm">Entraîne-toi sans adversaire, 9 manches d’affilée.</p>
+        </section>
+      )}
 
       {uiState === 'resolved' ? (
         <section className="card">
@@ -748,14 +768,22 @@ export function GamePage() {
               <p className="text-sm text-slate-300">Mot : {myResultAttempt?.answer_text ?? '—'}</p>
               <p className="text-sm">Points manche : <strong>{myResultAttempt?.points ?? 0}</strong></p>
             </div>
-            <div className="rounded-lg bg-slate-800 px-3 py-2">
-              <p className="font-semibold">Adversaire{opponent ? ` (${opponent.pseudo})` : ''}</p>
-              <p className="text-sm text-slate-300">Mot : {opponentResultAttempt?.answer_text ?? '—'}</p>
-              <p className="text-sm">Points manche : <strong>{opponentResultAttempt?.points ?? 0}</strong></p>
-            </div>
+            {!isSoloMode ? (
+              <div className="rounded-lg bg-slate-800 px-3 py-2">
+                <p className="font-semibold">Adversaire{opponent ? ` (${opponent.pseudo})` : ''}</p>
+                <p className="text-sm text-slate-300">Mot : {opponentResultAttempt?.answer_text ?? '—'}</p>
+                <p className="text-sm">Points manche : <strong>{opponentResultAttempt?.points ?? 0}</strong></p>
+              </div>
+            ) : null}
             <div className="rounded-lg border border-slate-700 px-3 py-2">
-              <p className="text-sm">Score cumulé — Toi : <strong>{myScore}</strong> pts</p>
-              <p className="text-sm">Score cumulé — Adversaire : <strong>{opponent ? totalsByPlayer[opponent.id] ?? 0 : 0}</strong> pts</p>
+              {isSoloMode ? (
+                <p className="text-sm">Score total : <strong>{myScore}</strong> pts</p>
+              ) : (
+                <>
+                  <p className="text-sm">Score cumulé — Toi : <strong>{myScore}</strong> pts</p>
+                  <p className="text-sm">Score cumulé — Adversaire : <strong>{opponent ? totalsByPlayer[opponent.id] ?? 0 : 0}</strong> pts</p>
+                </>
+              )}
             </div>
           </div>
           <button className="btn-primary mt-3" onClick={goToNextRound}>Manche suivante</button>
@@ -955,15 +983,21 @@ export function GamePage() {
           </div>
         ) : null}
 
-        {uiState === 'submitted' ? (
+        {uiState === 'submitted' && !isSoloMode ? (
           <p className="text-emerald-400 text-sm">Manche terminée. Attends l’autre joueur pour débloquer la suite.</p>
         ) : null}
       </section>
 
       <section className="card">
         <h2 className="font-bold">Score</h2>
-        <p>Toi : <strong>{myScore}</strong> pts</p>
-        <p>Adversaire : <strong>{opponent ? totalsByPlayer[opponent.id] ?? 0 : 0}</strong> pts</p>
+        {isSoloMode ? (
+          <p>Score total : <strong>{myScore}</strong> pts</p>
+        ) : (
+          <>
+            <p>Toi : <strong>{myScore}</strong> pts</p>
+            <p>Adversaire : <strong>{opponent ? totalsByPlayer[opponent.id] ?? 0 : 0}</strong> pts</p>
+          </>
+        )}
       </section>
 
       <button
