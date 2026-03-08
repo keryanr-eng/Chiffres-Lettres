@@ -71,7 +71,7 @@ export function GamePage() {
   const [clock, setClock] = useState(0);
   const [players, setPlayers] = useState<PlayerLite[]>([]);
   const [letterSubmitError, setLetterSubmitError] = useState('');
-  const [dismissedResultRound, setDismissedResultRound] = useState<number | null>(null);
+  const [recapRoundId, setRecapRoundId] = useState<string | null>(null);
   const [realtimeError, setRealtimeError] = useState('');
   const [lastRealtimeEventAt, setLastRealtimeEventAt] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -288,10 +288,6 @@ export function GamePage() {
     setIsShuffling(false);
     setLetterSubmitError('');
   }, [round?.id, round?.round_type, round?.payload.letters]);
-
-  useEffect(() => {
-    setDismissedResultRound(null);
-  }, [currentRoundIndex]);
 
   useEffect(() => {
     if (!myAttempt?.id) return;
@@ -626,23 +622,36 @@ export function GamePage() {
     return roundAttempts.every((attempt) => attempt.status === 'submitted' || attempt.status === 'expired');
   };
 
-  const currentRoundFinishedByBoth = isRoundResolved(round?.id);
+  const currentRoundId = round?.id ?? null;
+  const currentRoundAttempts = currentRoundId ? (attemptsByRoundId.get(currentRoundId) ?? []) : [];
+  const currentRoundAttemptCount = currentRoundAttempts.length;
+  const isCurrentRoundResolved = isRoundResolved(currentRoundId ?? undefined);
 
-  const displayedResultRoundIndex = useMemo(() => {
-    if (currentRoundFinishedByBoth) return currentRoundIndex;
-    if (currentRoundIndex <= 0) return null;
-    const previousRound = rounds[currentRoundIndex - 1];
-    return isRoundResolved(previousRound?.id) ? currentRoundIndex - 1 : null;
-  }, [currentRoundFinishedByBoth, currentRoundIndex, rounds, attemptsByRoundId]);
+  const previousRound = currentRoundIndex > 0 ? rounds[currentRoundIndex - 1] : undefined;
+  const previousRoundResolvedId = previousRound && isRoundResolved(previousRound.id) ? previousRound.id : null;
 
-  const resultRound = displayedResultRoundIndex !== null ? rounds[displayedResultRoundIndex] : undefined;
+  useEffect(() => {
+    if (recapRoundId && isRoundResolved(recapRoundId)) {
+      return;
+    }
+
+    if (isCurrentRoundResolved && currentRoundId) {
+      setRecapRoundId(currentRoundId);
+      return;
+    }
+
+    if (previousRoundResolvedId) {
+      setRecapRoundId(previousRoundResolvedId);
+      return;
+    }
+
+    setRecapRoundId(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRoundId, isCurrentRoundResolved, previousRoundResolvedId, allGameAttempts]);
+
+  const resultRound = recapRoundId ? rounds.find((r) => r.id === recapRoundId) : undefined;
   const resultRoundAttempts = resultRound ? (attemptsByRoundId.get(resultRound.id) ?? []) : [];
-
-  const showResultPanel =
-    displayedResultRoundIndex !== null &&
-    dismissedResultRound !== displayedResultRoundIndex &&
-    (isSoloMode || resultRoundAttempts.length >= 2) &&
-    resultRoundAttempts.some((attempt) => attempt.player_id === (profile?.id ?? ''));
+  const isRecapVisible = !!resultRound && isRoundResolved(resultRound.id);
 
   const opponent = players.find((player) => player.id !== (profile?.id ?? ''));
   const myResultAttempt = resultRoundAttempts.find((attempt) => attempt.player_id === (profile?.id ?? ''));
@@ -651,10 +660,8 @@ export function GamePage() {
   const uiState: 'idle' | 'playing' | 'expired' | 'submitted' | 'resolved' | 'game_over' =
     gameStatus === 'finished'
       ? 'game_over'
-      : showResultPanel
+      : isRecapVisible
         ? 'resolved'
-        : isSoloMode && (myAttempt?.status === 'submitted' || myAttempt?.status === 'expired')
-          ? 'resolved'
         : myAttempt?.status === 'pending'
           ? 'idle'
           : myAttempt?.status === 'started'
@@ -667,14 +674,15 @@ export function GamePage() {
 
   const uiStateReason = useMemo(() => {
     if (gameStatus === 'finished') return 'game finished in DB';
-    if (showResultPanel) return 'result panel visible (round completed)';
+    if (isRecapVisible) return `recap visible for round ${resultRound?.round_index ?? '?'} (completed)`;
+    if (currentRoundAttemptCount === 0) return 'current round has no attempt yet';
     if (!myAttempt) return isSoloMode ? 'solo: no attempt yet for current round' : 'duo: no attempt loaded';
     if (myAttempt.status === 'pending') return 'attempt pending (round not started)';
     if (myAttempt.status === 'started') return clock > 0 ? 'attempt started with remaining timer' : 'attempt started with timer at 0';
     if (myAttempt.status === 'submitted') return 'attempt submitted';
     if (myAttempt.status === 'expired') return 'attempt expired';
     return 'fallback idle';
-  }, [gameStatus, showResultPanel, myAttempt, isSoloMode, clock]);
+  }, [gameStatus, isRecapVisible, resultRound?.round_index, currentRoundAttemptCount, myAttempt, isSoloMode, clock]);
 
   const shouldShowRoundContent = uiState === 'playing' || uiState === 'expired' || uiState === 'submitted';
 
@@ -697,17 +705,14 @@ export function GamePage() {
     return fromQuery || fromStorage;
   }, [location.search]);
 
-  const currentRoundAttempts = round ? (attemptsByRoundId.get(round.id) ?? []) : [];
-
-
-  const totalsByPlayer = allGameAttempts.reduce<Record<string, number>>((acc, attempt) => {
+    const totalsByPlayer = allGameAttempts.reduce<Record<string, number>>((acc, attempt) => {
     acc[attempt.player_id] = (acc[attempt.player_id] ?? 0) + (attempt.points ?? 0);
     return acc;
   }, {});
 
   const goToNextRound = () => {
     resetRoundUiFeedback();
-    setDismissedResultRound(displayedResultRoundIndex);
+    setRecapRoundId(null);
     refresh().catch(() => undefined);
   };
 
@@ -777,7 +782,7 @@ export function GamePage() {
 
       {uiState === 'resolved' ? (
         <section className="card">
-          <h2 className="font-bold">Résultat manche {displayedResultRoundIndex! + 1}</h2>
+          <h2 className="font-bold">Résultat manche {(resultRound?.round_index ?? 0) + 1}</h2>
           <div className="mt-3 space-y-2">
             <div className="rounded-lg bg-slate-800 px-3 py-2">
               <p className="font-semibold">Toi</p>
@@ -1030,8 +1035,13 @@ export function GamePage() {
           <p>gameId: {gameId}</p>
           <p>playerId: {profile.id}</p>
           <p>opponentId: {opponent?.id ?? '—'}</p>
+          <p>currentRoundId: {currentRoundId ?? 'none'}</p>
+          <p>recapRoundId: {recapRoundId ?? 'none'}</p>
           <p>attempts total chargées: {allGameAttempts.length}</p>
           <p>attempts manche courante: {currentRoundAttempts.length}</p>
+          <p>currentRoundAttemptCount: {currentRoundAttemptCount}</p>
+          <p>isCurrentRoundResolved: {isCurrentRoundResolved ? 'yes' : 'no'}</p>
+          <p>isRecapVisible: {isRecapVisible ? 'yes' : 'no'}</p>
           <p>attempt active: {myAttempt ? `${myAttempt.id} (${myAttempt.status})` : 'none'}</p>
           <p>uiState: {uiState}</p>
           <p>uiState reason: {uiStateReason}</p>
