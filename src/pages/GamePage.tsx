@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { createGame, createSoloGame, fetchGameBundle, joinGame, startRound, submitLetters, submitNumbers } from '../lib/gameApi';
+import { createGame, createSoloGame, fetchGameBundle, joinGame, startCurrentRoundForPlayer, startRound, submitLetters, submitNumbers } from '../lib/gameApi';
 import { normalizeWord } from '../lib/normalize';
 import { readProfile } from '../lib/profile';
 import { supabase } from '../lib/supabase';
@@ -302,10 +302,15 @@ export function GamePage() {
   }, [myAttempt?.id, myAttempt?.status]);
 
   const onStartRound = async () => {
-    if (!myAttempt) return;
     resetRoundUiFeedback();
     await ensureAudioUnlocked();
-    await startRound(myAttempt.id);
+    if (myAttempt) {
+      await startRound(myAttempt.id);
+    } else if (isSoloMode && profile && round) {
+      await startCurrentRoundForPlayer(gameId, profile.id);
+    } else {
+      return;
+    }
     await refresh();
   };
 
@@ -659,6 +664,17 @@ export function GamePage() {
               : myAttempt?.status === 'expired'
                 ? 'expired'
                 : 'idle';
+
+  const uiStateReason = useMemo(() => {
+    if (gameStatus === 'finished') return 'game finished in DB';
+    if (showResultPanel) return 'result panel visible (round completed)';
+    if (!myAttempt) return isSoloMode ? 'solo: no attempt yet for current round' : 'duo: no attempt loaded';
+    if (myAttempt.status === 'pending') return 'attempt pending (round not started)';
+    if (myAttempt.status === 'started') return clock > 0 ? 'attempt started with remaining timer' : 'attempt started with timer at 0';
+    if (myAttempt.status === 'submitted') return 'attempt submitted';
+    if (myAttempt.status === 'expired') return 'attempt expired';
+    return 'fallback idle';
+  }, [gameStatus, showResultPanel, myAttempt, isSoloMode, clock]);
 
   const shouldShowRoundContent = uiState === 'playing' || uiState === 'expired' || uiState === 'submitted';
 
@@ -1016,6 +1032,9 @@ export function GamePage() {
           <p>opponentId: {opponent?.id ?? '—'}</p>
           <p>attempts total chargées: {allGameAttempts.length}</p>
           <p>attempts manche courante: {currentRoundAttempts.length}</p>
+          <p>attempt active: {myAttempt ? `${myAttempt.id} (${myAttempt.status})` : 'none'}</p>
+          <p>uiState: {uiState}</p>
+          <p>uiState reason: {uiStateReason}</p>
           <p>audio unlocked: {audioUnlocked ? 'yes' : 'no'}</p>
           <p>audio muted: {audioMuted ? 'yes' : 'no'}</p>
           <p>last realtime event: {lastRealtimeEventAt || '—'}</p>

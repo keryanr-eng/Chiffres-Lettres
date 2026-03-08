@@ -314,12 +314,6 @@ begin
     );
   end loop;
 
-  insert into attempts(game_id, round_id, player_id)
-  select v_game_id, r.id, p_creator
-  from rounds r
-  where r.game_id = v_game_id
-  on conflict do nothing;
-
   return jsonb_build_object('game_id', v_game_id, 'code', v_code);
 end;
 $$;
@@ -417,6 +411,43 @@ end;
 $$;
 
 grant execute on function start_attempt(uuid) to anon, authenticated;
+
+create or replace function start_current_round_for_player(p_game_id uuid, p_player_id uuid)
+returns jsonb language plpgsql security definer as $$
+declare
+  g games%rowtype;
+  r rounds%rowtype;
+  attempt_id uuid;
+begin
+  select * into g from games where id = p_game_id;
+  if g.id is null then raise exception 'Partie introuvable'; end if;
+
+  if not exists(
+    select 1 from game_players gp
+    where gp.game_id = p_game_id and gp.player_id = p_player_id
+  ) then
+    raise exception 'Accès refusé à cette partie';
+  end if;
+
+  select * into r from rounds where game_id = p_game_id and round_index = g.current_round_index;
+  if r.id is null then raise exception 'Manche introuvable'; end if;
+
+  insert into attempts(game_id, round_id, player_id)
+  values (p_game_id, r.id, p_player_id)
+  on conflict (round_id, player_id) do nothing;
+
+  select id into attempt_id
+  from attempts
+  where round_id = r.id and player_id = p_player_id;
+
+  return jsonb_build_object(
+    'attempt_id', attempt_id,
+    'start', start_attempt(attempt_id)
+  );
+end;
+$$;
+
+grant execute on function start_current_round_for_player(uuid,uuid) to anon, authenticated;
 
 create or replace function contains_only_drawn_numbers(p_round_id uuid, p_expression text)
 returns boolean language plpgsql as $$

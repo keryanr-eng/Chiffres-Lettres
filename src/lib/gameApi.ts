@@ -58,6 +58,15 @@ export const startRound = async (attemptId: string) => {
   return data as { started_at: string; deadline_at: string };
 };
 
+export const startCurrentRoundForPlayer = async (gameId: string, playerId: string) => {
+  const { data, error } = await supabase.rpc('start_current_round_for_player', {
+    p_game_id: gameId,
+    p_player_id: playerId,
+  });
+  if (error) throw error;
+  return data as { attempt_id: string; start: { started_at: string; deadline_at: string } };
+};
+
 export const submitLetters = async (attemptId: string, answer: string) => {
   const { data, error } = await supabase.rpc('submit_letters_attempt', {
     p_attempt_id: attemptId,
