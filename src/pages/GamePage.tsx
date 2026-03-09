@@ -80,6 +80,7 @@ export function GamePage() {
   const [audioMuted, setAudioMuted] = useState(false);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [autoSubmitLogs, setAutoSubmitLogs] = useState<string[]>([]);
+  const [lastAutoSubmitReason, setLastAutoSubmitReason] = useState('none');
 
   const [letterTiles, setLetterTiles] = useState<LetterTile[]>([]);
   const [letterOrder, setLetterOrder] = useState<string[]>([]);
@@ -100,6 +101,7 @@ export function GamePage() {
   const previousClockForAutoRef = useRef<number | null>(null);
   const tenSecondAlertAttemptRef = useRef<string | null>(null);
   const autoSubmitAttemptRef = useRef<string | null>(null);
+  const autoSubmitTriggeredRef = useRef(false);
   const winSoundRoundRef = useRef<string | null>(null);
   const sfxRef = useRef(createSfxController());
 
@@ -112,6 +114,7 @@ export function GamePage() {
     setLetterSubmitError('');
     setCalcError('');
     setAutoSubmitLogs([]);
+    setLastAutoSubmitReason('none');
     setTenSecondFlash(false);
   };
 
@@ -134,8 +137,11 @@ export function GamePage() {
   const myAttempt = attempts.find((a) => a.round_id === rounds[currentRoundIndex]?.id);
   const round = rounds[currentRoundIndex];
   const isSoloMode = gameMode === 'solo';
+  const currentRoundType = round?.round_type ?? 'letters';
   const roundTitle = `Manche ${currentRoundIndex + 1}/9 · ${round?.round_type === 'numbers' ? 'Chiffres' : 'Lettres'}`;
 
+  const hasAttempt = !!myAttempt;
+  const hasActiveAttempt = !!myAttempt && myAttempt.status === 'started' && !!myAttempt.started_at && !!myAttempt.deadline_at;
   const isStarted = myAttempt?.status === 'started';
   const isFinished = myAttempt?.status === 'submitted' || myAttempt?.status === 'expired';
   const isTimeUpWithoutSubmit = isStarted && clock === 0;
@@ -294,6 +300,7 @@ export function GamePage() {
     if (!myAttempt?.id) return;
     if (myAttempt.status !== 'started') {
       autoSubmitAttemptRef.current = null;
+      autoSubmitTriggeredRef.current = false;
       previousClockForAutoRef.current = null;
     }
   }, [myAttempt?.id, myAttempt?.status]);
@@ -380,19 +387,31 @@ export function GamePage() {
 
   useEffect(() => {
     if (!myAttempt || !round || myAttempt.status !== 'started' || isFinished) {
+      setLastAutoSubmitReason('skip: no started attempt');
+      return;
+    }
+
+    if (!hasActiveAttempt) {
+      setLastAutoSubmitReason('skip: attempt missing started_at/deadline_at');
       return;
     }
 
     const previous = previousClockForAutoRef.current;
-    const crossedZero = previous === null ? clock <= 0 : previous > 0 && clock <= 0;
+    const crossedZero = previous !== null && previous > 0 && clock <= 0;
     previousClockForAutoRef.current = clock;
 
     if (!crossedZero) {
+      setLastAutoSubmitReason(previous === null ? 'skip: waiting first >0 tick' : 'skip: timer not crossed zero');
       return;
     }
 
-    if (autoSubmitAttemptRef.current === myAttempt.id || isSubmitting) return;
+    if (autoSubmitAttemptRef.current === myAttempt.id || isSubmitting || autoSubmitTriggeredRef.current) {
+      setLastAutoSubmitReason('skip: already submitted/submitting');
+      return;
+    }
     autoSubmitAttemptRef.current = myAttempt.id;
+    autoSubmitTriggeredRef.current = true;
+    setLastAutoSubmitReason('triggered: active attempt crossed >0 -> <=0');
 
     const snapshotWord = round.round_type === 'letters' ? buildWordFromIds(selectedLetterIds, letterTiles) : '';
     const snapshotResult = calcFinalValue;
@@ -407,10 +426,12 @@ export function GamePage() {
     }).catch((err) => {
       setError((err as Error).message);
       pushAutoSubmitLog(`AUTO-SUBMIT error: ${(err as Error).message}`);
+      setLastAutoSubmitReason(`error: ${(err as Error).message}`);
       autoSubmitAttemptRef.current = null;
+      autoSubmitTriggeredRef.current = false;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clock, myAttempt?.id, myAttempt?.status, round?.id, selectedLetterIds, letterTiles, calcFinalValue, calcTrace, calcHistory.length, isSubmitting]);
+  }, [clock, myAttempt?.id, myAttempt?.status, myAttempt?.started_at, myAttempt?.deadline_at, round?.id, selectedLetterIds, letterTiles, calcFinalValue, calcTrace, calcHistory.length, isSubmitting, hasActiveAttempt]);
 
   const onPass = async () => {
     if (!myAttempt || !round || !isTimeUpWithoutSubmit || isFinished) return;
@@ -1044,6 +1065,7 @@ export function GamePage() {
           <p>playerId: {profile.id}</p>
           <p>opponentId: {opponent?.id ?? '—'}</p>
           <p>currentRoundId: {currentRoundId ?? 'none'}</p>
+          <p>currentRoundType: {currentRoundType}</p>
           <p>recapRoundId: {recapRoundId ?? 'none'}</p>
           <p>lastDismissedRecapRoundId: {lastDismissedRecapRoundId ?? 'none'}</p>
           <p>attempts total chargées: {allGameAttempts.length}</p>
@@ -1054,6 +1076,13 @@ export function GamePage() {
           <p>hasNextRound: {hasNextRound ? 'yes' : 'no'}</p>
           <p>canAdvanceToNextRound: {canAdvanceToNextRound ? 'yes' : 'no'}</p>
           <p>attempt active: {myAttempt ? `${myAttempt.id} (${myAttempt.status})` : 'none'}</p>
+          <p>hasAttempt: {hasAttempt ? 'yes' : 'no'}</p>
+          <p>hasActiveAttempt: {hasActiveAttempt ? 'yes' : 'no'}</p>
+          <p>remainingSeconds: {clock}</p>
+          <p>started_at: {myAttempt?.started_at ?? 'null'}</p>
+          <p>deadline_at: {myAttempt?.deadline_at ?? 'null'}</p>
+          <p>autoSubmitTriggered: {autoSubmitTriggeredRef.current ? 'yes' : 'no'}</p>
+          <p>autoSubmitReason: {lastAutoSubmitReason}</p>
           <p>uiState: {uiState}</p>
           <p>uiState reason: {uiStateReason}</p>
           <p>audio unlocked: {audioUnlocked ? 'yes' : 'no'}</p>
