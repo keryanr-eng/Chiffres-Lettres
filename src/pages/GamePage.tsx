@@ -72,6 +72,7 @@ export function GamePage() {
   const [players, setPlayers] = useState<PlayerLite[]>([]);
   const [letterSubmitError, setLetterSubmitError] = useState('');
   const [recapRoundId, setRecapRoundId] = useState<string | null>(null);
+  const [lastDismissedRecapRoundId, setLastDismissedRecapRoundId] = useState<string | null>(null);
   const [realtimeError, setRealtimeError] = useState('');
   const [lastRealtimeEventAt, setLastRealtimeEventAt] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -629,6 +630,7 @@ export function GamePage() {
 
   const previousRound = currentRoundIndex > 0 ? rounds[currentRoundIndex - 1] : undefined;
   const previousRoundResolvedId = previousRound && isRoundResolved(previousRound.id) ? previousRound.id : null;
+  const hasNextRound = currentRoundIndex < rounds.length - 1;
 
   useEffect(() => {
     if (recapRoundId && isRoundResolved(recapRoundId)) {
@@ -640,18 +642,22 @@ export function GamePage() {
       return;
     }
 
-    if (previousRoundResolvedId) {
+    if (
+      previousRoundResolvedId &&
+      !(previousRoundResolvedId === lastDismissedRecapRoundId && currentRoundAttemptCount === 0 && !isCurrentRoundResolved)
+    ) {
       setRecapRoundId(previousRoundResolvedId);
       return;
     }
 
     setRecapRoundId(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentRoundId, isCurrentRoundResolved, previousRoundResolvedId, allGameAttempts]);
+  }, [currentRoundId, isCurrentRoundResolved, previousRoundResolvedId, currentRoundAttemptCount, allGameAttempts, lastDismissedRecapRoundId]);
 
   const resultRound = recapRoundId ? rounds.find((r) => r.id === recapRoundId) : undefined;
   const resultRoundAttempts = resultRound ? (attemptsByRoundId.get(resultRound.id) ?? []) : [];
-  const isRecapVisible = !!resultRound && isRoundResolved(resultRound.id);
+  const isRecapVisible = !!resultRound && isRoundResolved(resultRound.id) && recapRoundId !== lastDismissedRecapRoundId;
+  const canAdvanceToNextRound = isRecapVisible && hasNextRound;
 
   const opponent = players.find((player) => player.id !== (profile?.id ?? ''));
   const myResultAttempt = resultRoundAttempts.find((attempt) => attempt.player_id === (profile?.id ?? ''));
@@ -675,6 +681,7 @@ export function GamePage() {
   const uiStateReason = useMemo(() => {
     if (gameStatus === 'finished') return 'game finished in DB';
     if (isRecapVisible) return `recap visible for round ${resultRound?.round_index ?? '?'} (completed)`;
+    if (recapRoundId && recapRoundId === lastDismissedRecapRoundId) return 'recap dismissed for previous round, current round is active';
     if (currentRoundAttemptCount === 0) return 'current round has no attempt yet';
     if (!myAttempt) return isSoloMode ? 'solo: no attempt yet for current round' : 'duo: no attempt loaded';
     if (myAttempt.status === 'pending') return 'attempt pending (round not started)';
@@ -682,7 +689,7 @@ export function GamePage() {
     if (myAttempt.status === 'submitted') return 'attempt submitted';
     if (myAttempt.status === 'expired') return 'attempt expired';
     return 'fallback idle';
-  }, [gameStatus, isRecapVisible, resultRound?.round_index, currentRoundAttemptCount, myAttempt, isSoloMode, clock]);
+  }, [gameStatus, isRecapVisible, resultRound?.round_index, recapRoundId, lastDismissedRecapRoundId, currentRoundAttemptCount, myAttempt, isSoloMode, clock]);
 
   const shouldShowRoundContent = uiState === 'playing' || uiState === 'expired' || uiState === 'submitted';
 
@@ -712,6 +719,7 @@ export function GamePage() {
 
   const goToNextRound = () => {
     resetRoundUiFeedback();
+    setLastDismissedRecapRoundId(recapRoundId);
     setRecapRoundId(null);
     refresh().catch(() => undefined);
   };
@@ -1037,11 +1045,14 @@ export function GamePage() {
           <p>opponentId: {opponent?.id ?? '—'}</p>
           <p>currentRoundId: {currentRoundId ?? 'none'}</p>
           <p>recapRoundId: {recapRoundId ?? 'none'}</p>
+          <p>lastDismissedRecapRoundId: {lastDismissedRecapRoundId ?? 'none'}</p>
           <p>attempts total chargées: {allGameAttempts.length}</p>
           <p>attempts manche courante: {currentRoundAttempts.length}</p>
           <p>currentRoundAttemptCount: {currentRoundAttemptCount}</p>
           <p>isCurrentRoundResolved: {isCurrentRoundResolved ? 'yes' : 'no'}</p>
           <p>isRecapVisible: {isRecapVisible ? 'yes' : 'no'}</p>
+          <p>hasNextRound: {hasNextRound ? 'yes' : 'no'}</p>
+          <p>canAdvanceToNextRound: {canAdvanceToNextRound ? 'yes' : 'no'}</p>
           <p>attempt active: {myAttempt ? `${myAttempt.id} (${myAttempt.status})` : 'none'}</p>
           <p>uiState: {uiState}</p>
           <p>uiState reason: {uiStateReason}</p>
