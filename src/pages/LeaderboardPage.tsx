@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchDailyLeaderboard, fetchGlobalLeaderboard, fetchPersonalBest } from '../lib/gameApi';
+import { fetchDailyChallengeLeaderboard, fetchDailyLeaderboard, fetchGlobalLeaderboard, fetchPersonalBest } from '../lib/gameApi';
 import { readProfile } from '../lib/profile';
 import type { LeaderboardScoreRow } from '../types';
 
@@ -36,6 +36,7 @@ export function LeaderboardPage() {
   const [error, setError] = useState('');
   const [globalTop, setGlobalTop] = useState<LeaderboardScoreRow[]>([]);
   const [dailyTop, setDailyTop] = useState<LeaderboardScoreRow[]>([]);
+  const [dailyChallengeTop, setDailyChallengeTop] = useState<LeaderboardScoreRow[]>([]);
   const [personalBest, setPersonalBest] = useState<number | null>(null);
 
   useEffect(() => {
@@ -43,9 +44,14 @@ export function LeaderboardPage() {
       setLoading(true);
       setError('');
       try {
-        const [globalRows, dailyRows] = await Promise.all([fetchGlobalLeaderboard(), fetchDailyLeaderboard()]);
+        const [globalRows, dailyRows, dailyChallengeRows] = await Promise.all([
+          fetchGlobalLeaderboard(),
+          fetchDailyLeaderboard(),
+          fetchDailyChallengeLeaderboard(),
+        ]);
         setGlobalTop(globalRows);
         setDailyTop(dailyRows);
+        setDailyChallengeTop(dailyChallengeRows);
 
         if (profile?.pseudo) {
           const best = await fetchPersonalBest(profile.pseudo);
@@ -68,8 +74,8 @@ export function LeaderboardPage() {
   return (
     <main className="mx-auto max-w-md min-h-screen p-4 flex flex-col gap-4">
       <section className="card">
-        <h1 className="text-2xl font-black">Leaderboard Solo</h1>
-        <p className="text-sm text-slate-300 mt-1">Progresse manche après manche et bats ton record.</p>
+        <h1 className="text-2xl font-black">Classements</h1>
+        <p className="text-sm text-slate-300 mt-1">Compare ton score en solo libre et en Défi du jour.</p>
       </section>
 
       {podium.length > 0 ? (
@@ -88,7 +94,8 @@ export function LeaderboardPage() {
       ) : null}
 
       <LeaderboardList title="🏆 Classement global" rows={globalTop} />
-      <LeaderboardList title="📅 Classement du jour" rows={dailyTop} />
+      <LeaderboardList title="📅 Classement solo du jour" rows={dailyTop} />
+      <LeaderboardList title="🔥 Défi du jour" rows={dailyChallengeTop} />
 
       <section className="card">
         <h2 className="font-bold">🎯 Ton record</h2>

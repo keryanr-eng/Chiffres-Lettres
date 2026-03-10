@@ -64,6 +64,7 @@ Ce script crée :
 > - ajout de la fonction RPC `start_current_round_for_player` (création de tentative à la demande en solo),
 > - correction `submit_numbers_attempt` pour accepter un PASS propre (`p_result=null`, `p_expression=null|'PASS'`).
 > - ajout de la table `leaderboard_scores` (mode solo) et des RPC `submit_leaderboard_score`, `get_leaderboard_global`, `get_leaderboard_daily`, `get_personal_best`.
+> - ajout du mode `daily` (Défi du jour) : tables `daily_challenges`, `daily_challenge_rounds`, `daily_challenge_scores` + RPC `get_or_create_daily_challenge`, `create_daily_game_with_rounds`, `submit_daily_score`, `get_daily_challenge_leaderboard`.
 
 ### Étape D — Importer le dictionnaire FR (obligatoire pour la validation serveur Lettres)
 
@@ -121,6 +122,13 @@ npm run import:words # importer le dictionnaire FR en base
 2. Vérifie l'écran final : score final + record personnel.
 3. Retourne à l'accueil puis clique **Voir le classement**.
 4. Vérifie les 3 zones : global, du jour, record perso.
+
+### Test rapide du Défi du jour
+
+1. Depuis l'accueil, clique **🔥 Défi du jour**.
+2. Termine les 9 manches.
+3. Vérifie l'écran final : score final + meilleur score du jour.
+4. Clique **Voir le classement** puis vérifie la section **🔥 Défi du jour**.
 
 ---
 

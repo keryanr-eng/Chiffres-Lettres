@@ -9,7 +9,7 @@ export interface GameRow {
   id: string;
   code: string;
   created_by: string;
-  mode: 'duo' | 'solo';
+  mode: 'duo' | 'solo' | 'daily';
   status: 'waiting' | 'active' | 'finished';
   current_round_index: number;
 }
@@ -45,4 +45,17 @@ export interface LeaderboardScoreRow {
   player_name: string;
   score: number;
   created_at: string;
+}
+
+
+export interface DailyChallengeInfo {
+  challenge_id: string;
+  challenge_date: string;
+}
+
+export interface DailySubmitResult {
+  challenge_id: string;
+  challenge_date: string;
+  best_score: number;
+  is_new_best: boolean;
 }

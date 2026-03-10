@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { AttemptRow, GameRow, LeaderboardScoreRow, RoundRow } from '../types';
+import type { AttemptRow, DailyChallengeInfo, DailySubmitResult, GameRow, LeaderboardScoreRow, RoundRow } from '../types';
 
 export const ROUND_FLOW = ['letters', 'letters', 'numbers', 'letters', 'letters', 'numbers', 'letters', 'letters', 'numbers'] as const;
 
@@ -17,6 +17,22 @@ export const createSoloGame = async (playerId: string) => {
   const { data, error } = await supabase.rpc('create_solo_game_with_rounds', { p_creator: playerId });
   if (error) throw error;
   return data as { game_id: string; code: string };
+};
+
+
+export const getOrCreateDailyChallenge = async () => {
+  const { data, error } = await supabase.rpc('get_or_create_daily_challenge');
+  if (error) throw error;
+  const rows = Array.isArray(data) ? (data as DailyChallengeInfo[]) : [];
+  const row = rows[0] ?? null;
+  if (!row) throw new Error('Défi du jour indisponible');
+  return row;
+};
+
+export const createDailyGame = async (playerId: string) => {
+  const { data, error } = await supabase.rpc('create_daily_game_with_rounds', { p_creator: playerId });
+  if (error) throw error;
+  return data as { game_id: string; code: string; challenge_date: string };
 };
 
 export const joinGame = async (playerId: string, code: string) => {
@@ -115,4 +131,20 @@ export const fetchPersonalBest = async (playerName: string) => {
 
   const rows = Array.isArray(data) ? (data as Array<{ best_score: number | null }>) : [];
   return rows[0]?.best_score ?? null;
+};
+
+
+export const submitDailyScore = async (playerName: string, score: number) => {
+  const { data, error } = await supabase.rpc('submit_daily_score', {
+    p_player_name: playerName,
+    p_score: score,
+  });
+  if (error) throw error;
+  return data as DailySubmitResult;
+};
+
+export const fetchDailyChallengeLeaderboard = async () => {
+  const { data, error } = await supabase.rpc('get_daily_challenge_leaderboard');
+  if (error) throw error;
+  return (data ?? []) as LeaderboardScoreRow[];
 };

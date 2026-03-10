@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
+  createDailyGame,
   createGame,
   createSoloGame,
   fetchGameBundle,
@@ -8,6 +9,7 @@ import {
   joinGame,
   startCurrentRoundForPlayer,
   startRound,
+  submitDailyScore,
   submitLeaderboardScore,
   submitLetters,
   submitNumbers,
@@ -76,7 +78,7 @@ export function GamePage() {
   const [attempts, setAttempts] = useState<AttemptRow[]>([]);
   const [allGameAttempts, setAllGameAttempts] = useState<AttemptRow[]>([]);
   const [gameCode, setGameCode] = useState('');
-  const [gameMode, setGameMode] = useState<'duo' | 'solo'>('duo');
+  const [gameMode, setGameMode] = useState<'duo' | 'solo' | 'daily'>('duo');
   const [gameStatus, setGameStatus] = useState<'waiting' | 'active' | 'finished'>('waiting');
   const [currentRoundIndex, setCurrentRoundIndex] = useState(0);
   const [clock, setClock] = useState(0);
@@ -94,6 +96,10 @@ export function GamePage() {
   const [lastAutoSubmitReason, setLastAutoSubmitReason] = useState('none');
   const [soloPersonalBest, setSoloPersonalBest] = useState<number | null>(null);
   const [soloScoreSubmitted, setSoloScoreSubmitted] = useState(false);
+  const [dailyBestScore, setDailyBestScore] = useState<number | null>(null);
+  const [dailyScoreSubmitted, setDailyScoreSubmitted] = useState(false);
+  const [dailyIsNewBest, setDailyIsNewBest] = useState(false);
+  const [dailyChallengeDate, setDailyChallengeDate] = useState<string>('');
 
   const [letterTiles, setLetterTiles] = useState<LetterTile[]>([]);
   const [letterOrder, setLetterOrder] = useState<string[]>([]);
@@ -119,6 +125,7 @@ export function GamePage() {
   const sfxRef = useRef(createSfxController());
   const submittedSoloGameRef = useRef<string | null>(null);
   const previousSoloBestRef = useRef<number | null>(null);
+  const submittedDailyGameRef = useRef<string | null>(null);
 
   const pushAutoSubmitLog = (message: string) => {
     setAutoSubmitLogs((prev) => [...prev.slice(-5), `${new Date().toLocaleTimeString()} · ${message}`]);
@@ -152,6 +159,8 @@ export function GamePage() {
   const myAttempt = attempts.find((a) => a.round_id === rounds[currentRoundIndex]?.id);
   const round = rounds[currentRoundIndex];
   const isSoloMode = gameMode === 'solo';
+  const isDailyMode = gameMode === 'daily';
+  const isSinglePlayerMode = isSoloMode || isDailyMode;
   const currentRoundType = round?.round_type ?? 'letters';
   const roundTitle = `Manche ${currentRoundIndex + 1}/9 · ${round?.round_type === 'numbers' ? 'Chiffres' : 'Lettres'}`;
 
@@ -220,12 +229,17 @@ export function GamePage() {
   useEffect(() => {
     setSoloPersonalBest(null);
     setSoloScoreSubmitted(false);
+    setDailyBestScore(null);
+    setDailyScoreSubmitted(false);
+    setDailyIsNewBest(false);
+    setDailyChallengeDate('');
     submittedSoloGameRef.current = null;
     previousSoloBestRef.current = null;
+    submittedDailyGameRef.current = null;
   }, [gameId]);
 
   useEffect(() => {
-    if (isSoloMode) return;
+    if (isSinglePlayerMode) return;
     if (!profile) return;
     const channel = supabase
       .channel(`attempts-game-${gameId}`)
@@ -247,9 +261,9 @@ export function GamePage() {
       supabase.removeChannel(channel);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameId, profile?.id, isSoloMode]);
+  }, [gameId, profile?.id, isSinglePlayerMode]);
 
-  const isWaitingState = !isSoloMode && !!myAttempt && (myAttempt.status === 'pending' || myAttempt.status === 'submitted' || myAttempt.status === 'expired');
+  const isWaitingState = !isSinglePlayerMode && !!myAttempt && (myAttempt.status === 'pending' || myAttempt.status === 'submitted' || myAttempt.status === 'expired');
 
   useEffect(() => {
     if (!profile || !isWaitingState) return;
@@ -332,7 +346,7 @@ export function GamePage() {
     await ensureAudioUnlocked();
     if (myAttempt) {
       await startRound(myAttempt.id);
-    } else if (isSoloMode && profile && round) {
+    } else if (isSinglePlayerMode && profile && round) {
       await startCurrentRoundForPlayer(gameId, profile.id);
     } else {
       return;
@@ -658,7 +672,7 @@ export function GamePage() {
   const isRoundResolved = (roundId: string | undefined) => {
     if (!roundId) return false;
     const roundAttempts = attemptsByRoundId.get(roundId) ?? [];
-    if (isSoloMode) {
+    if (isSinglePlayerMode) {
       const mine = roundAttempts.find((attempt) => attempt.player_id === (profile?.id ?? ''));
       return !!mine && (mine.status === 'submitted' || mine.status === 'expired');
     }
@@ -726,13 +740,13 @@ export function GamePage() {
     if (isRecapVisible) return `recap visible for round ${resultRound?.round_index ?? '?'} (completed)`;
     if (recapRoundId && recapRoundId === lastDismissedRecapRoundId) return 'recap dismissed for previous round, current round is active';
     if (currentRoundAttemptCount === 0) return 'current round has no attempt yet';
-    if (!myAttempt) return isSoloMode ? 'solo: no attempt yet for current round' : 'duo: no attempt loaded';
+    if (!myAttempt) return isSinglePlayerMode ? 'solo/daily: no attempt yet for current round' : 'duo: no attempt loaded';
     if (myAttempt.status === 'pending') return 'attempt pending (round not started)';
     if (myAttempt.status === 'started') return clock > 0 ? 'attempt started with remaining timer' : 'attempt started with timer at 0';
     if (myAttempt.status === 'submitted') return 'attempt submitted';
     if (myAttempt.status === 'expired') return 'attempt expired';
     return 'fallback idle';
-  }, [gameStatus, isRecapVisible, resultRound?.round_index, recapRoundId, lastDismissedRecapRoundId, currentRoundAttemptCount, myAttempt, isSoloMode, clock]);
+  }, [gameStatus, isRecapVisible, resultRound?.round_index, recapRoundId, lastDismissedRecapRoundId, currentRoundAttemptCount, myAttempt, isSinglePlayerMode, clock]);
 
   const shouldShowRoundContent = uiState === 'playing' || uiState === 'expired' || uiState === 'submitted';
 
@@ -786,6 +800,27 @@ export function GamePage() {
     });
   }, [isSoloMode, uiState, profile?.pseudo, gameId, soloScoreSubmitted, finalSoloScore]);
 
+  useEffect(() => {
+    if (!isDailyMode || uiState !== 'game_over' || !profile?.pseudo) return;
+    if (submittedDailyGameRef.current === gameId || dailyScoreSubmitted) return;
+
+    submittedDailyGameRef.current = gameId;
+
+    const submit = async () => {
+      const result = await submitDailyScore(profile.pseudo, finalSoloScore);
+      setDailyBestScore(result.best_score);
+      setDailyIsNewBest(result.is_new_best);
+      setDailyChallengeDate(result.challenge_date);
+      setDailyScoreSubmitted(true);
+    };
+
+    submit().catch((err) => {
+      submittedDailyGameRef.current = null;
+      setDailyScoreSubmitted(false);
+      setError((err as Error).message);
+    });
+  }, [isDailyMode, uiState, profile?.pseudo, gameId, dailyScoreSubmitted, finalSoloScore]);
+
   const isNewSoloRecord = useMemo(() => {
     if (!isSoloMode || uiState !== 'game_over') return false;
     if (!soloScoreSubmitted) return false;
@@ -803,9 +838,9 @@ export function GamePage() {
   const onReplay = async () => {
     if (!profile) return;
     try {
-      const newGame = isSoloMode ? await createSoloGame(profile.id) : await createGame(profile.id);
+      const newGame = isDailyMode ? await createDailyGame(profile.id) : isSoloMode ? await createSoloGame(profile.id) : await createGame(profile.id);
 
-      if (!isSoloMode) {
+      if (!isSinglePlayerMode) {
         const opponent = players.find((player) => player.id !== profile.id);
         if (opponent) {
           await joinGame(opponent.id, newGame.code);
@@ -822,7 +857,7 @@ export function GamePage() {
   }
 
   if (uiState === 'game_over') {
-    const sortedFinal = (isSoloMode ? players.filter((player) => player.id === profile.id) : players)
+    const sortedFinal = (isSinglePlayerMode ? players.filter((player) => player.id === profile.id) : players)
       .map((player) => ({
         ...player,
         total: totalsByPlayer[player.id] ?? 0,
@@ -832,13 +867,21 @@ export function GamePage() {
     return (
       <main className="mx-auto max-w-md min-h-screen p-4 flex flex-col gap-4">
         <section className="card">
-          <h1 className="text-2xl font-black">Partie terminée 🎉</h1>
+          <h1 className="text-2xl font-black">{isDailyMode ? 'Défi du jour terminé 🎯' : 'Partie terminée 🎉'}</h1>
           <p className="text-slate-300 mt-1">Score final</p>
           {isSoloMode ? (
             <div className="mt-3 rounded-lg border border-slate-700 px-3 py-3">
               <p className="text-sm">Score final : <strong>{finalSoloScore} pts</strong></p>
               <p className="text-sm mt-1">Ton record : <strong>{soloPersonalBest ?? finalSoloScore} pts</strong></p>
               {isNewSoloRecord ? <p className="text-emerald-400 text-sm mt-2">🔥 Nouveau record personnel !</p> : null}
+            </div>
+          ) : null}
+          {isDailyMode ? (
+            <div className="mt-3 rounded-lg border border-slate-700 px-3 py-3">
+              <p className="text-sm">Date du défi : <strong>{dailyChallengeDate || "aujourd'hui"}</strong></p>
+              <p className="text-sm mt-1">Score final : <strong>{finalSoloScore} pts</strong></p>
+              <p className="text-sm mt-1">Ton meilleur score du jour : <strong>{dailyBestScore ?? finalSoloScore} pts</strong></p>
+              {dailyIsNewBest ? <p className="text-emerald-400 text-sm mt-2">🔥 Nouveau meilleur score du jour !</p> : null}
             </div>
           ) : null}
           <div className="mt-3 space-y-2">
@@ -851,7 +894,8 @@ export function GamePage() {
           </div>
         </section>
 
-        <button className="btn-primary" onClick={onReplay}>Rejouer</button>
+        <button className="btn-primary" onClick={onReplay}>{isDailyMode ? 'Rejouer le défi' : 'Rejouer'}</button>
+        {isDailyMode ? <button className="btn-secondary" onClick={() => navigate('/leaderboard')}>Voir le classement du jour</button> : null}
         <button className="btn-secondary" onClick={() => navigate('/')}>Retour menu</button>
       </main>
     );
@@ -859,15 +903,15 @@ export function GamePage() {
 
   return (
     <main className="mx-auto max-w-md min-h-screen p-4 flex flex-col gap-4 overflow-x-hidden">
-      {!isSoloMode ? (
+      {!isSinglePlayerMode ? (
         <section className="card">
           <p className="text-sm text-slate-400">Code partie à partager</p>
           <p className="text-3xl font-black tracking-widest">{gameCode || '...'}</p>
         </section>
       ) : (
         <section className="card">
-          <p className="text-sm text-brand-500 font-semibold">Mode solo</p>
-          <p className="text-slate-300 text-sm">Entraîne-toi sans adversaire, 9 manches d’affilée.</p>
+          <p className="text-sm text-brand-500 font-semibold">{isDailyMode ? '🔥 Défi du jour' : 'Mode solo'}</p>
+          <p className="text-slate-300 text-sm">{isDailyMode ? 'Même tirage pour tout le monde aujourd’hui.' : 'Entraîne-toi sans adversaire, 9 manches d’affilée.'}</p>
         </section>
       )}
 
@@ -880,7 +924,7 @@ export function GamePage() {
               <p className="text-sm text-slate-300">Mot : {myResultAttempt?.answer_text ?? '—'}</p>
               <p className="text-sm">Points manche : <strong>{myResultAttempt?.points ?? 0}</strong></p>
             </div>
-            {!isSoloMode ? (
+            {!isSinglePlayerMode ? (
               <div className="rounded-lg bg-slate-800 px-3 py-2">
                 <p className="font-semibold">Adversaire{opponent ? ` (${opponent.pseudo})` : ''}</p>
                 <p className="text-sm text-slate-300">Mot : {opponentResultAttempt?.answer_text ?? '—'}</p>
@@ -888,7 +932,7 @@ export function GamePage() {
               </div>
             ) : null}
             <div className="rounded-lg border border-slate-700 px-3 py-2">
-              {isSoloMode ? (
+              {isSinglePlayerMode ? (
                 <p className="text-sm">Score total : <strong>{myScore}</strong> pts</p>
               ) : (
                 <>
@@ -1095,14 +1139,14 @@ export function GamePage() {
           </div>
         ) : null}
 
-        {uiState === 'submitted' && !isSoloMode ? (
+        {uiState === 'submitted' && !isSinglePlayerMode ? (
           <p className="text-emerald-400 text-sm">Manche terminée. Attends l’autre joueur pour débloquer la suite.</p>
         ) : null}
       </section>
 
       <section className="card">
         <h2 className="font-bold">Score</h2>
-        {isSoloMode ? (
+        {isSinglePlayerMode ? (
           <p>Score total : <strong>{myScore}</strong> pts</p>
         ) : (
           <>
@@ -1125,6 +1169,7 @@ export function GamePage() {
           <h3 className="font-bold mb-2">Debug</h3>
           <p>gameId: {gameId}</p>
           <p>playerId: {profile.id}</p>
+          <p>gameMode: {gameMode}</p>
           <p>opponentId: {opponent?.id ?? '—'}</p>
           <p>currentRoundId: {currentRoundId ?? 'none'}</p>
           <p>currentRoundType: {currentRoundType}</p>

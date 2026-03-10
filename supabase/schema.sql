@@ -40,7 +40,7 @@ create table if not exists games (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,
   created_by uuid not null references players(id),
-  mode text not null default 'duo' check (mode in ('duo', 'solo')),
+  mode text not null default 'duo' check (mode in ('duo', 'solo', 'daily')),
   status text not null default 'waiting' check (status in ('waiting', 'active', 'finished')),
   current_round_index int not null default 0,
   created_at timestamptz not null default now()
@@ -51,7 +51,8 @@ update games set mode = 'duo' where mode is null;
 alter table games alter column mode set default 'duo';
 alter table games alter column mode set not null;
 alter table games drop constraint if exists games_mode_check;
-alter table games add constraint games_mode_check check (mode in ('duo', 'solo'));
+alter table games add constraint games_mode_check check (mode in ('duo', 'solo', 'daily'));
+
 
 create table if not exists game_players (
   game_id uuid not null references games(id) on delete cascade,
@@ -98,12 +99,50 @@ create table if not exists leaderboard_scores (
 create index if not exists leaderboard_scores_score_idx on leaderboard_scores(score desc);
 create index if not exists leaderboard_scores_created_at_idx on leaderboard_scores(created_at desc);
 
+
+create table if not exists daily_challenges (
+  id uuid primary key default gen_random_uuid(),
+  challenge_date date not null unique,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists daily_challenge_rounds (
+  id uuid primary key default gen_random_uuid(),
+  challenge_id uuid not null references daily_challenges(id) on delete cascade,
+  round_index int not null check (round_index between 0 and 8),
+  round_type text not null check (round_type in ('letters','numbers')),
+  payload jsonb not null,
+  letters_duration_sec int not null,
+  numbers_duration_sec int not null,
+  unique (challenge_id, round_index)
+);
+
+create table if not exists daily_challenge_scores (
+  id uuid primary key default gen_random_uuid(),
+  challenge_id uuid not null references daily_challenges(id) on delete cascade,
+  player_name text not null,
+  player_name_key text not null,
+  score integer not null,
+  created_at timestamptz not null default now(),
+  unique (challenge_id, player_name_key)
+);
+
+create index if not exists daily_challenge_rounds_challenge_idx on daily_challenge_rounds(challenge_id, round_index);
+create index if not exists daily_challenge_scores_challenge_score_idx on daily_challenge_scores(challenge_id, score desc, created_at asc);
+create index if not exists daily_challenge_scores_player_idx on daily_challenge_scores(player_name_key);
+
+alter table games add column if not exists daily_challenge_id uuid references daily_challenges(id);
+create index if not exists games_daily_challenge_idx on games(daily_challenge_id);
+
 alter table players enable row level security;
 alter table games enable row level security;
 alter table game_players enable row level security;
 alter table rounds enable row level security;
 alter table attempts enable row level security;
 alter table leaderboard_scores enable row level security;
+alter table daily_challenges enable row level security;
+alter table daily_challenge_rounds enable row level security;
+alter table daily_challenge_scores enable row level security;
 
 drop policy if exists "players_rw" on players;
 create policy "players_rw" on players for all using (true) with check (true);
@@ -122,6 +161,16 @@ create policy "attempts_read" on attempts for select using (true);
 
 drop policy if exists "leaderboard_scores_read" on leaderboard_scores;
 create policy "leaderboard_scores_read" on leaderboard_scores for select using (true);
+
+
+drop policy if exists "daily_challenges_read" on daily_challenges;
+create policy "daily_challenges_read" on daily_challenges for select using (true);
+
+drop policy if exists "daily_challenge_rounds_read" on daily_challenge_rounds;
+create policy "daily_challenge_rounds_read" on daily_challenge_rounds for select using (true);
+
+drop policy if exists "daily_challenge_scores_read" on daily_challenge_scores;
+create policy "daily_challenge_scores_read" on daily_challenge_scores for select using (true);
 
 create or replace function gen_game_code()
 returns text language plpgsql as $$
@@ -341,7 +390,7 @@ declare
 begin
   select * into g from games where code = upper(trim(p_code));
   if g.id is null then raise exception 'Code invalide'; end if;
-  if g.mode = 'solo' then raise exception 'Cette partie est en mode solo'; end if;
+  if g.mode <> 'duo' then raise exception 'Cette partie n'accepte pas de second joueur'; end if;
 
   if exists(select 1 from game_players where game_id = g.id and player_id = p_player) then return; end if;
 
@@ -675,3 +724,151 @@ grant execute on function submit_leaderboard_score(text,integer) to anon, authen
 grant execute on function get_leaderboard_global() to anon, authenticated;
 grant execute on function get_leaderboard_daily() to anon, authenticated;
 grant execute on function get_personal_best(text) to anon, authenticated;
+
+
+create or replace function get_or_create_daily_challenge()
+returns table(challenge_id uuid, challenge_date date)
+language plpgsql
+security definer
+as $$
+declare
+  v_id uuid;
+  cfg record;
+  flow text[] := array['letters','letters','numbers','letters','letters','numbers','letters','letters','numbers'];
+  i int;
+begin
+  select dc.id into v_id from daily_challenges dc where dc.challenge_date = current_date;
+
+  if v_id is null then
+    insert into daily_challenges(challenge_date)
+    values (current_date)
+    on conflict (challenge_date) do nothing
+    returning id into v_id;
+
+    if v_id is null then
+      select dc.id into v_id from daily_challenges dc where dc.challenge_date = current_date;
+    end if;
+
+    select * into cfg from round_config where id = true;
+
+    for i in 1..9 loop
+      insert into daily_challenge_rounds(
+        challenge_id,
+        round_index,
+        round_type,
+        payload,
+        letters_duration_sec,
+        numbers_duration_sec
+      )
+      values (
+        v_id,
+        i - 1,
+        flow[i],
+        case when flow[i] = 'letters' then gen_letters_payload() else gen_numbers_payload() end,
+        cfg.letters_duration_sec,
+        cfg.numbers_duration_sec
+      )
+      on conflict (challenge_id, round_index) do nothing;
+    end loop;
+  end if;
+
+  return query
+  select dc.id, dc.challenge_date
+  from daily_challenges dc
+  where dc.id = v_id;
+end;
+$$;
+
+grant execute on function get_or_create_daily_challenge() to anon, authenticated;
+
+create or replace function create_daily_game_with_rounds(p_creator uuid)
+returns jsonb language plpgsql security definer as $$
+declare
+  v_game_id uuid := gen_random_uuid();
+  v_code text := gen_game_code();
+  v_challenge record;
+begin
+  select * into v_challenge from get_or_create_daily_challenge();
+
+  insert into games(id, code, created_by, mode, status, current_round_index, daily_challenge_id)
+  values (v_game_id, v_code, p_creator, 'daily', 'active', 0, v_challenge.challenge_id);
+
+  insert into game_players(game_id, player_id, seat)
+  values (v_game_id, p_creator, 1)
+  on conflict (game_id, player_id) do nothing;
+
+  insert into rounds(game_id, round_index, round_type, payload, letters_duration_sec, numbers_duration_sec)
+  select
+    v_game_id,
+    dcr.round_index,
+    dcr.round_type,
+    dcr.payload,
+    dcr.letters_duration_sec,
+    dcr.numbers_duration_sec
+  from daily_challenge_rounds dcr
+  where dcr.challenge_id = v_challenge.challenge_id
+  order by dcr.round_index;
+
+  return jsonb_build_object('game_id', v_game_id, 'code', v_code, 'challenge_date', v_challenge.challenge_date);
+end;
+$$;
+
+grant execute on function create_daily_game_with_rounds(uuid) to anon, authenticated;
+
+create or replace function submit_daily_score(p_player_name text, p_score integer)
+returns jsonb language plpgsql security definer as $$
+declare
+  v_challenge record;
+  v_player_name text := left(coalesce(nullif(btrim(p_player_name), ''), 'Anonyme'), 40);
+  v_key text := lower(v_player_name);
+  v_score int := greatest(coalesce(p_score, 0), 0);
+  v_best int;
+  v_existing int;
+begin
+  select * into v_challenge from get_or_create_daily_challenge();
+
+  select dcs.score into v_existing
+  from daily_challenge_scores dcs
+  where dcs.challenge_id = v_challenge.challenge_id
+    and dcs.player_name_key = v_key;
+
+  insert into daily_challenge_scores(challenge_id, player_name, player_name_key, score)
+  values (v_challenge.challenge_id, v_player_name, v_key, v_score)
+  on conflict (challenge_id, player_name_key)
+  do update set
+    score = greatest(daily_challenge_scores.score, excluded.score),
+    player_name = case when excluded.score > daily_challenge_scores.score then excluded.player_name else daily_challenge_scores.player_name end,
+    created_at = case when excluded.score > daily_challenge_scores.score then now() else daily_challenge_scores.created_at end;
+
+  select dcs.score into v_best
+  from daily_challenge_scores dcs
+  where dcs.challenge_id = v_challenge.challenge_id
+    and dcs.player_name_key = v_key;
+
+  return jsonb_build_object(
+    'challenge_id', v_challenge.challenge_id,
+    'challenge_date', v_challenge.challenge_date,
+    'best_score', coalesce(v_best, v_score),
+    'is_new_best', coalesce(v_existing is null or v_score > v_existing, true)
+  );
+end;
+$$;
+
+grant execute on function submit_daily_score(text,integer) to anon, authenticated;
+
+create or replace function get_daily_challenge_leaderboard()
+returns table(player_name text, score integer, created_at timestamptz)
+language sql
+security definer
+as $$
+  with challenge as (
+    select challenge_id from get_or_create_daily_challenge()
+  )
+  select dcs.player_name, dcs.score, dcs.created_at
+  from daily_challenge_scores dcs
+  join challenge c on c.challenge_id = dcs.challenge_id
+  order by dcs.score desc, dcs.created_at asc
+  limit 20;
+$$;
+
+grant execute on function get_daily_challenge_leaderboard() to anon, authenticated;

@@ -1,6 +1,6 @@
 import { ChangeEvent, FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createGame, createSoloGame, ensurePlayer, joinGame } from '../lib/gameApi';
+import { createDailyGame, createGame, createSoloGame, ensurePlayer, getOrCreateDailyChallenge, joinGame } from '../lib/gameApi';
 import { readProfile, saveProfile } from '../lib/profile';
 
 export function HomePage() {
@@ -40,6 +40,24 @@ export function HomePage() {
     try {
       const player = await withPlayer();
       const result = await createSoloGame(player.id);
+      navigate(`/game/${result.game_id}`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
+
+  const onCreateDaily = async (event: FormEvent) => {
+    event.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const player = await withPlayer();
+      await getOrCreateDailyChallenge();
+      const result = await createDailyGame(player.id);
       navigate(`/game/${result.game_id}`);
     } catch (err) {
       setError((err as Error).message);
@@ -103,6 +121,12 @@ export function HomePage() {
           maxLength={6}
         />
         <button className="btn-secondary" disabled={loading || joinCode.length < 4}>Rejoindre</button>
+      </form>
+
+
+      <form onSubmit={onCreateDaily} className="card flex flex-col gap-3">
+        <p className="text-sm text-slate-300">Mode quotidien</p>
+        <button className="btn-secondary" disabled={loading}>🔥 Défi du jour <span className="text-xs">(Aujourd’hui)</span></button>
       </form>
 
       <button className="btn-secondary" disabled={loading} onClick={() => navigate('/leaderboard')}>
