@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { createGame, createSoloGame, fetchGameBundle, joinGame, startCurrentRoundForPlayer, startRound, submitLetters, submitNumbers } from '../lib/gameApi';
+import {
+  createGame,
+  createSoloGame,
+  fetchGameBundle,
+  fetchPersonalBest,
+  joinGame,
+  startCurrentRoundForPlayer,
+  startRound,
+  submitLeaderboardScore,
+  submitLetters,
+  submitNumbers,
+} from '../lib/gameApi';
 import { normalizeWord } from '../lib/normalize';
 import { readProfile } from '../lib/profile';
 import { supabase } from '../lib/supabase';
@@ -81,6 +92,8 @@ export function GamePage() {
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [autoSubmitLogs, setAutoSubmitLogs] = useState<string[]>([]);
   const [lastAutoSubmitReason, setLastAutoSubmitReason] = useState('none');
+  const [soloPersonalBest, setSoloPersonalBest] = useState<number | null>(null);
+  const [soloScoreSubmitted, setSoloScoreSubmitted] = useState(false);
 
   const [letterTiles, setLetterTiles] = useState<LetterTile[]>([]);
   const [letterOrder, setLetterOrder] = useState<string[]>([]);
@@ -104,6 +117,8 @@ export function GamePage() {
   const autoSubmitTriggeredRef = useRef(false);
   const winSoundRoundRef = useRef<string | null>(null);
   const sfxRef = useRef(createSfxController());
+  const submittedSoloGameRef = useRef<string | null>(null);
+  const previousSoloBestRef = useRef<number | null>(null);
 
   const pushAutoSubmitLog = (message: string) => {
     setAutoSubmitLogs((prev) => [...prev.slice(-5), `${new Date().toLocaleTimeString()} · ${message}`]);
@@ -200,6 +215,13 @@ export function GamePage() {
       setLoading(false);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameId]);
+
+  useEffect(() => {
+    setSoloPersonalBest(null);
+    setSoloScoreSubmitted(false);
+    submittedSoloGameRef.current = null;
+    previousSoloBestRef.current = null;
   }, [gameId]);
 
   useEffect(() => {
@@ -733,10 +755,43 @@ export function GamePage() {
     return fromQuery || fromStorage;
   }, [location.search]);
 
-    const totalsByPlayer = allGameAttempts.reduce<Record<string, number>>((acc, attempt) => {
+  const totalsByPlayer = useMemo(() => allGameAttempts.reduce<Record<string, number>>((acc, attempt) => {
     acc[attempt.player_id] = (acc[attempt.player_id] ?? 0) + (attempt.points ?? 0);
     return acc;
-  }, {});
+  }, {}), [allGameAttempts]);
+
+  const finalSoloScore = profile ? totalsByPlayer[profile.id] ?? 0 : 0;
+
+  useEffect(() => {
+    if (!isSoloMode || uiState !== 'game_over' || !profile?.pseudo) return;
+    if (submittedSoloGameRef.current === gameId || soloScoreSubmitted) return;
+
+    submittedSoloGameRef.current = gameId;
+
+    const submit = async () => {
+      const previousBest = await fetchPersonalBest(profile.pseudo);
+      previousSoloBestRef.current = previousBest;
+
+      await submitLeaderboardScore(profile.pseudo, finalSoloScore);
+      setSoloScoreSubmitted(true);
+
+      const updatedBest = await fetchPersonalBest(profile.pseudo);
+      setSoloPersonalBest(updatedBest);
+    };
+
+    submit().catch((err) => {
+      submittedSoloGameRef.current = null;
+      setSoloScoreSubmitted(false);
+      setError((err as Error).message);
+    });
+  }, [isSoloMode, uiState, profile?.pseudo, gameId, soloScoreSubmitted, finalSoloScore]);
+
+  const isNewSoloRecord = useMemo(() => {
+    if (!isSoloMode || uiState !== 'game_over') return false;
+    if (!soloScoreSubmitted) return false;
+    const previousBest = previousSoloBestRef.current;
+    return previousBest === null || finalSoloScore > previousBest;
+  }, [isSoloMode, uiState, soloScoreSubmitted, finalSoloScore]);
 
   const goToNextRound = () => {
     resetRoundUiFeedback();
@@ -779,6 +834,13 @@ export function GamePage() {
         <section className="card">
           <h1 className="text-2xl font-black">Partie terminée 🎉</h1>
           <p className="text-slate-300 mt-1">Score final</p>
+          {isSoloMode ? (
+            <div className="mt-3 rounded-lg border border-slate-700 px-3 py-3">
+              <p className="text-sm">Score final : <strong>{finalSoloScore} pts</strong></p>
+              <p className="text-sm mt-1">Ton record : <strong>{soloPersonalBest ?? finalSoloScore} pts</strong></p>
+              {isNewSoloRecord ? <p className="text-emerald-400 text-sm mt-2">🔥 Nouveau record personnel !</p> : null}
+            </div>
+          ) : null}
           <div className="mt-3 space-y-2">
             {sortedFinal.map((player) => (
               <div key={player.id} className="flex items-center justify-between rounded-lg bg-slate-800 px-3 py-2">

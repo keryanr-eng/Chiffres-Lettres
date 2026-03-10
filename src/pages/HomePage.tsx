@@ -105,6 +105,10 @@ export function HomePage() {
         <button className="btn-secondary" disabled={loading || joinCode.length < 4}>Rejoindre</button>
       </form>
 
+      <button className="btn-secondary" disabled={loading} onClick={() => navigate('/leaderboard')}>
+        Voir le classement
+      </button>
+
       {error ? <p className="text-rose-400 text-sm">{error}</p> : null}
     </main>
   );

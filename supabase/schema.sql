@@ -88,11 +88,22 @@ create table if not exists attempts (
   unique (round_id, player_id)
 );
 
+create table if not exists leaderboard_scores (
+  id uuid primary key default gen_random_uuid(),
+  player_name text not null,
+  score integer not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists leaderboard_scores_score_idx on leaderboard_scores(score desc);
+create index if not exists leaderboard_scores_created_at_idx on leaderboard_scores(created_at desc);
+
 alter table players enable row level security;
 alter table games enable row level security;
 alter table game_players enable row level security;
 alter table rounds enable row level security;
 alter table attempts enable row level security;
+alter table leaderboard_scores enable row level security;
 
 drop policy if exists "players_rw" on players;
 create policy "players_rw" on players for all using (true) with check (true);
@@ -108,6 +119,9 @@ create policy "rounds_read" on rounds for select using (true);
 
 drop policy if exists "attempts_read" on attempts;
 create policy "attempts_read" on attempts for select using (true);
+
+drop policy if exists "leaderboard_scores_read" on leaderboard_scores;
+create policy "leaderboard_scores_read" on leaderboard_scores for select using (true);
 
 create or replace function gen_game_code()
 returns text language plpgsql as $$
@@ -613,3 +627,51 @@ $$;
 
 grant execute on function submit_letters_attempt(uuid,text) to anon, authenticated;
 grant execute on function submit_numbers_attempt(uuid,text,int) to anon, authenticated;
+
+create or replace function submit_leaderboard_score(p_player_name text, p_score integer)
+returns jsonb language plpgsql security definer as $$
+begin
+  insert into leaderboard_scores(player_name, score)
+  values (left(coalesce(nullif(btrim(p_player_name), ''), 'Anonyme'), 40), greatest(coalesce(p_score, 0), 0));
+
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+create or replace function get_leaderboard_global()
+returns table(player_name text, score integer, created_at timestamptz)
+language sql
+security definer
+as $$
+  select ls.player_name, ls.score, ls.created_at
+  from leaderboard_scores ls
+  order by ls.score desc, ls.created_at asc
+  limit 20;
+$$;
+
+create or replace function get_leaderboard_daily()
+returns table(player_name text, score integer, created_at timestamptz)
+language sql
+security definer
+as $$
+  select ls.player_name, ls.score, ls.created_at
+  from leaderboard_scores ls
+  where ls.created_at::date = current_date
+  order by ls.score desc, ls.created_at asc
+  limit 20;
+$$;
+
+create or replace function get_personal_best(p_player_name text)
+returns table(best_score integer)
+language sql
+security definer
+as $$
+  select max(ls.score)::integer as best_score
+  from leaderboard_scores ls
+  where lower(ls.player_name) = lower(coalesce(p_player_name, ''));
+$$;
+
+grant execute on function submit_leaderboard_score(text,integer) to anon, authenticated;
+grant execute on function get_leaderboard_global() to anon, authenticated;
+grant execute on function get_leaderboard_daily() to anon, authenticated;
+grant execute on function get_personal_best(text) to anon, authenticated;

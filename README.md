@@ -63,6 +63,7 @@ Ce script crée :
 > - ajout de la fonction RPC `create_solo_game_with_rounds`,
 > - ajout de la fonction RPC `start_current_round_for_player` (création de tentative à la demande en solo),
 > - correction `submit_numbers_attempt` pour accepter un PASS propre (`p_result=null`, `p_expression=null|'PASS'`).
+> - ajout de la table `leaderboard_scores` (mode solo) et des RPC `submit_leaderboard_score`, `get_leaderboard_global`, `get_leaderboard_daily`, `get_personal_best`.
 
 ### Étape D — Importer le dictionnaire FR (obligatoire pour la validation serveur Lettres)
 
@@ -113,6 +114,13 @@ npm run lint     # vérifier la qualité TypeScript/ESLint
 npm run check    # lint + build
 npm run import:words # importer le dictionnaire FR en base
 ```
+
+### Test rapide du leaderboard solo
+
+1. Lance une partie **solo** et termine les 9 manches.
+2. Vérifie l'écran final : score final + record personnel.
+3. Retourne à l'accueil puis clique **Voir le classement**.
+4. Vérifie les 3 zones : global, du jour, record perso.
 
 ---
 

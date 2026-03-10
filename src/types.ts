@@ -40,3 +40,9 @@ export interface AttemptRow {
   points: number;
   status: 'pending' | 'started' | 'submitted' | 'expired';
 }
+
+export interface LeaderboardScoreRow {
+  player_name: string;
+  score: number;
+  created_at: string;
+}

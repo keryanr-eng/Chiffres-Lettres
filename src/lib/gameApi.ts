@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { AttemptRow, GameRow, RoundRow } from '../types';
+import type { AttemptRow, GameRow, LeaderboardScoreRow, RoundRow } from '../types';
 
 export const ROUND_FLOW = ['letters', 'letters', 'numbers', 'letters', 'letters', 'numbers', 'letters', 'letters', 'numbers'] as const;
 
@@ -84,4 +84,35 @@ export const submitNumbers = async (attemptId: string, finalValue: number | null
   });
   if (error) throw error;
   return data as { points: number; computed_value: number; status: string };
+};
+
+export const submitLeaderboardScore = async (playerName: string, score: number) => {
+  const { data, error } = await supabase.rpc('submit_leaderboard_score', {
+    p_player_name: playerName,
+    p_score: score,
+  });
+  if (error) throw error;
+  return data as { ok: boolean };
+};
+
+export const fetchGlobalLeaderboard = async () => {
+  const { data, error } = await supabase.rpc('get_leaderboard_global');
+  if (error) throw error;
+  return (data ?? []) as LeaderboardScoreRow[];
+};
+
+export const fetchDailyLeaderboard = async () => {
+  const { data, error } = await supabase.rpc('get_leaderboard_daily');
+  if (error) throw error;
+  return (data ?? []) as LeaderboardScoreRow[];
+};
+
+export const fetchPersonalBest = async (playerName: string) => {
+  const { data, error } = await supabase.rpc('get_personal_best', {
+    p_player_name: playerName,
+  });
+  if (error) throw error;
+
+  const rows = Array.isArray(data) ? (data as Array<{ best_score: number | null }>) : [];
+  return rows[0]?.best_score ?? null;
 };
