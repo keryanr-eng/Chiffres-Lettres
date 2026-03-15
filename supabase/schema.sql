@@ -508,11 +508,10 @@ begin
     'rounds', (select coalesce(jsonb_agg(r order by r.round_index), '[]'::jsonb) from rounds r where r.game_id = p_game_id),
     'attempts', (select coalesce(jsonb_agg(a order by a.created_at), '[]'::jsonb) from attempts a where a.game_id = p_game_id),
     'players', (
-      select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'pseudo', p.pseudo)), '[]'::jsonb)
+      select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'pseudo', p.pseudo) order by gp.seat), '[]'::jsonb)
       from game_players gp
       join players p on p.id = gp.player_id
       where gp.game_id = p_game_id
-      order by gp.seat
     )
   );
 end;
