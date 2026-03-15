@@ -63,6 +63,10 @@ create table if not exists game_players (
   unique (game_id, seat)
 );
 
+
+alter table game_players drop constraint if exists game_players_seat_check;
+alter table game_players add constraint game_players_seat_check check (seat between 1 and 8);
+
 create table if not exists rounds (
   id uuid primary key default gen_random_uuid(),
   game_id uuid not null references games(id) on delete cascade,
