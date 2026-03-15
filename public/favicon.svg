@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0ea5e9"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>
+  <rect width="200" height="200" rx="36" fill="#020617"/>
+  <circle cx="100" cy="100" r="64" fill="url(#g)"/>
+  <text x="100" y="112" text-anchor="middle" font-size="50" fill="#020617" font-family="Arial">C&L</text>
+</svg>
