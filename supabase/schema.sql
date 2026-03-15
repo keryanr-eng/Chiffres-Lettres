@@ -802,6 +802,7 @@ grant execute on function get_leaderboard_daily() to anon, authenticated;
 grant execute on function get_personal_best(text) to anon, authenticated;
 
 
+drop function if exists get_or_create_daily_challenge();
 create or replace function get_or_create_daily_challenge()
 returns table(challenge_id uuid, challenge_date date)
 language plpgsql
