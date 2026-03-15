@@ -745,6 +745,7 @@ export function GamePage() {
       attempts: AttemptRow[];
       mine?: AttemptRow;
       opponentAttempt?: AttemptRow;
+      otherAttempts: Array<AttemptRow & { pseudo: string; cumulative: number }>;
       cumulativeMine: number;
       cumulativeOpponent: number;
     }> = [];
@@ -761,19 +762,28 @@ export function GamePage() {
 
       const mine = attemptsForRound.find((attempt) => attempt.player_id === myPlayerId);
       const opponentAttempt = opponent ? attemptsForRound.find((attempt) => attempt.player_id === opponent.id) : undefined;
+      const otherAttempts = attemptsForRound
+        .filter((attempt) => attempt.player_id !== myPlayerId)
+        .map((attempt) => ({
+          ...attempt,
+          pseudo: players.find((player) => player.id === attempt.player_id)?.pseudo ?? 'Joueur',
+          cumulative: cumulativeByPlayer[attempt.player_id] ?? 0,
+        }))
+        .sort((a, b) => b.points - a.points);
 
       history.push({
         round: itemRound,
         attempts: attemptsForRound,
         mine,
         opponentAttempt,
+        otherAttempts,
         cumulativeMine: cumulativeByPlayer[myPlayerId] ?? 0,
         cumulativeOpponent: opponent ? (cumulativeByPlayer[opponent.id] ?? 0) : 0,
       });
     }
 
     return history;
-  }, [rounds, allGameAttempts, opponent, profile?.id]);
+  }, [rounds, allGameAttempts, opponent, players, profile?.id]);
 
   const toggleHistoryRound = (roundId: string) => {
     setExpandedHistoryRoundIds((prev) => (
@@ -1277,9 +1287,33 @@ export function GamePage() {
                         </>
                       ) : null}
 
+                      {isMultiMode ? (
+                        <div className="rounded-md border border-slate-700 px-2 py-2 text-xs text-slate-300 space-y-1">
+                          <p className="font-semibold">Réponses des autres joueurs</p>
+                          {item.otherAttempts.length === 0 ? (
+                            <p>—</p>
+                          ) : (
+                            <ul className="space-y-1">
+                              {item.otherAttempts.map((attempt) => (
+                                <li key={`history-other-${item.round.id}-${attempt.player_id}`}>
+                                  {attempt.pseudo} : <strong>{attempt.answer_text ?? '—'}</strong> · {attempt.points} pts
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      ) : null}
+
                       <div className="rounded-md border border-slate-700 px-2 py-2 text-xs text-slate-300">
                         <p>Score cumulé à cette manche — Toi : <strong>{item.cumulativeMine}</strong> pts</p>
                         {isDuoMode ? <p>Adversaire : <strong>{item.cumulativeOpponent}</strong> pts</p> : null}
+                        {isMultiMode ? (
+                          <ul className="mt-1 space-y-1">
+                            {item.otherAttempts.map((attempt) => (
+                              <li key={`history-cumulative-${item.round.id}-${attempt.player_id}`}>{attempt.pseudo}: <strong>{attempt.cumulative}</strong> pts</li>
+                            ))}
+                          </ul>
+                        ) : null}
                       </div>
                     </div>
                   ) : null}
