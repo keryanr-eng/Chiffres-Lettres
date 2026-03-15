@@ -65,6 +65,7 @@ Ce script crée :
 > - correction `submit_numbers_attempt` pour accepter un PASS propre (`p_result=null`, `p_expression=null|'PASS'`).
 > - ajout de la table `leaderboard_scores` (mode solo) et des RPC `submit_leaderboard_score`, `get_leaderboard_global`, `get_leaderboard_daily`, `get_personal_best`.
 > - ajout du mode `daily` (Défi du jour) : tables `daily_challenges`, `daily_challenge_rounds`, `daily_challenge_scores` + RPC `get_or_create_daily_challenge`, `create_daily_game_with_rounds`, `submit_daily_score`, `get_daily_challenge_leaderboard`.
+> - ajout du mode `multi` (3 à 8 joueurs) : RPC `create_multi_game`, `start_multi_game`, adaptation `join_game_by_code` et des seats 1..8.
 
 ### Étape D — Importer le dictionnaire FR (obligatoire pour la validation serveur Lettres)
 
@@ -129,6 +130,14 @@ npm run import:words # importer le dictionnaire FR en base
 2. Termine les 9 manches.
 3. Vérifie l'écran final : score final + meilleur score du jour.
 4. Clique **Voir le classement** puis vérifie la section **🔥 Défi du jour**.
+
+### Test rapide du mode multi
+
+1. Joueur A : clique **Créer une partie multi** puis partage le code du lobby.
+2. Joueur B/C : rejoignent avec ce code (tant que la room est en `waiting`).
+3. Vérifie que la liste joueurs se met à jour dans le lobby.
+4. Hôte : clique **Lancer la partie**.
+5. Vérifie dans la partie : score perso + bloc **Classement** trié par score.
 
 ---
 

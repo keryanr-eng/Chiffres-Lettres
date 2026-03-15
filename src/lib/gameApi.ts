@@ -19,6 +19,12 @@ export const createSoloGame = async (playerId: string) => {
   return data as { game_id: string; code: string };
 };
 
+export const createMultiGame = async (playerId: string) => {
+  const { data, error } = await supabase.rpc('create_multi_game', { p_creator: playerId });
+  if (error) throw error;
+  return data as { game_id: string; code: string };
+};
+
 
 export const getOrCreateDailyChallenge = async () => {
   const { data, error } = await supabase.rpc('get_or_create_daily_challenge');
@@ -36,11 +42,12 @@ export const createDailyGame = async (playerId: string) => {
 };
 
 export const joinGame = async (playerId: string, code: string) => {
-  const { error } = await supabase.rpc('join_game_by_code', {
+  const { data, error } = await supabase.rpc('join_game_by_code', {
     p_player: playerId,
     p_code: code.toUpperCase(),
   });
   if (error) throw error;
+  return data as { game_id: string; mode: 'duo' | 'multi'; status: 'waiting' | 'active' | 'finished' };
 };
 
 export const fetchGameBundle = async (gameId: string, playerId: string) => {
@@ -147,4 +154,13 @@ export const fetchDailyChallengeLeaderboard = async () => {
   const { data, error } = await supabase.rpc('get_daily_challenge_leaderboard');
   if (error) throw error;
   return (data ?? []) as LeaderboardScoreRow[];
+};
+
+export const startMultiGame = async (gameId: string, playerId: string) => {
+  const { data, error } = await supabase.rpc('start_multi_game', {
+    p_game_id: gameId,
+    p_player_id: playerId,
+  });
+  if (error) throw error;
+  return data as { ok: boolean; game_id: string };
 };

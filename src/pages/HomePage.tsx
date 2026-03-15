@@ -1,6 +1,6 @@
 import { ChangeEvent, FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createDailyGame, createGame, createSoloGame, ensurePlayer, getOrCreateDailyChallenge, joinGame } from '../lib/gameApi';
+import { createDailyGame, createGame, createMultiGame, createSoloGame, ensurePlayer, getOrCreateDailyChallenge, joinGame } from '../lib/gameApi';
 import { readProfile, saveProfile } from '../lib/profile';
 
 export function HomePage() {
@@ -50,6 +50,21 @@ export function HomePage() {
 
 
 
+  const onCreateMulti = async (event: FormEvent) => {
+    event.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const player = await withPlayer();
+      const result = await createMultiGame(player.id);
+      navigate(`/lobby/${result.game_id}`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const onCreateDaily = async (event: FormEvent) => {
     event.preventDefault();
     setError('');
@@ -72,13 +87,12 @@ export function HomePage() {
     setLoading(true);
     try {
       const player = await withPlayer();
-      await joinGame(player.id, joinCode);
-      const { data } = await (await import('../lib/supabase')).supabase
-        .from('games')
-        .select('id')
-        .eq('code', joinCode.toUpperCase())
-        .single();
-      navigate(`/game/${data?.id}`);
+      const joined = await joinGame(player.id, joinCode);
+      if (joined.mode === 'multi' && joined.status === 'waiting') {
+        navigate(`/lobby/${joined.game_id}`);
+      } else {
+        navigate(`/game/${joined.game_id}`);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -109,6 +123,12 @@ export function HomePage() {
       <form onSubmit={onCreate} className="card flex flex-col gap-3">
         <p className="text-sm text-slate-300">Mode duo</p>
         <button className="btn-primary" disabled={loading}>Créer une partie</button>
+      </form>
+
+
+      <form onSubmit={onCreateMulti} className="card flex flex-col gap-3">
+        <p className="text-sm text-slate-300">Mode multi (3 à 8 joueurs)</p>
+        <button className="btn-primary" disabled={loading}>Créer une partie multi</button>
       </form>
 
       <form onSubmit={onJoin} className="card flex flex-col gap-3">

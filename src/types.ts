@@ -9,7 +9,7 @@ export interface GameRow {
   id: string;
   code: string;
   created_by: string;
-  mode: 'duo' | 'solo' | 'daily';
+  mode: 'duo' | 'solo' | 'daily' | 'multi';
   status: 'waiting' | 'active' | 'finished';
   current_round_index: number;
 }

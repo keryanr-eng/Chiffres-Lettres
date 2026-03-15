@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   createDailyGame,
   createGame,
+  createMultiGame,
   createSoloGame,
   fetchGameBundle,
   fetchPersonalBest,
@@ -78,7 +79,7 @@ export function GamePage() {
   const [attempts, setAttempts] = useState<AttemptRow[]>([]);
   const [allGameAttempts, setAllGameAttempts] = useState<AttemptRow[]>([]);
   const [gameCode, setGameCode] = useState('');
-  const [gameMode, setGameMode] = useState<'duo' | 'solo' | 'daily'>('duo');
+  const [gameMode, setGameMode] = useState<'duo' | 'solo' | 'daily' | 'multi'>('duo');
   const [gameStatus, setGameStatus] = useState<'waiting' | 'active' | 'finished'>('waiting');
   const [currentRoundIndex, setCurrentRoundIndex] = useState(0);
   const [clock, setClock] = useState(0);
@@ -161,6 +162,8 @@ export function GamePage() {
   const round = rounds[currentRoundIndex];
   const isSoloMode = gameMode === 'solo';
   const isDailyMode = gameMode === 'daily';
+  const isMultiMode = gameMode === 'multi';
+  const isDuoMode = gameMode === 'duo';
   const isSinglePlayerMode = isSoloMode || isDailyMode;
   const currentRoundType = round?.round_type ?? 'letters';
   const roundTitle = `Manche ${currentRoundIndex + 1}/9 · ${round?.round_type === 'numbers' ? 'Chiffres' : 'Lettres'}`;
@@ -678,7 +681,10 @@ export function GamePage() {
       const mine = roundAttempts.find((attempt) => attempt.player_id === (profile?.id ?? ''));
       return !!mine && (mine.status === 'submitted' || mine.status === 'expired');
     }
-    if (roundAttempts.length < 2) return false;
+
+    const expectedPlayers = isMultiMode ? players.length : 2;
+    if (expectedPlayers <= 0) return false;
+    if (roundAttempts.length < expectedPlayers) return false;
     return roundAttempts.every((attempt) => attempt.status === 'submitted' || attempt.status === 'expired');
   };
 
@@ -895,15 +901,21 @@ export function GamePage() {
   const onReplay = async () => {
     if (!profile) return;
     try {
-      const newGame = isDailyMode ? await createDailyGame(profile.id) : isSoloMode ? await createSoloGame(profile.id) : await createGame(profile.id);
+      const newGame = isDailyMode
+        ? await createDailyGame(profile.id)
+        : isSoloMode
+          ? await createSoloGame(profile.id)
+          : isMultiMode
+            ? await createMultiGame(profile.id)
+            : await createGame(profile.id);
 
-      if (!isSinglePlayerMode) {
+      if (isDuoMode) {
         const opponent = players.find((player) => player.id !== profile.id);
         if (opponent) {
           await joinGame(opponent.id, newGame.code);
         }
       }
-      navigate(`/game/${newGame.game_id}`);
+      navigate(isMultiMode ? `/lobby/${newGame.game_id}` : `/game/${newGame.game_id}`);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -951,7 +963,7 @@ export function GamePage() {
           </div>
         </section>
 
-        <button className="btn-primary" onClick={onReplay}>{isDailyMode ? 'Rejouer le défi' : 'Rejouer'}</button>
+        <button className="btn-primary" onClick={onReplay}>{isDailyMode ? 'Rejouer le défi' : isMultiMode ? 'Créer une nouvelle room multi' : 'Rejouer'}</button>
         {isDailyMode ? <button className="btn-secondary" onClick={() => navigate('/leaderboard')}>Voir le classement du jour</button> : null}
         <button className="btn-secondary" onClick={() => navigate('/')}>Retour menu</button>
       </main>
@@ -964,6 +976,7 @@ export function GamePage() {
         <section className="card">
           <p className="text-sm text-slate-400">Code partie à partager</p>
           <p className="text-3xl font-black tracking-widest">{gameCode || '...'}</p>
+          {isMultiMode ? <p className="text-xs text-brand-500 mt-2">Partie multi ({players.length}/8)</p> : null}
         </section>
       ) : (
         <section className="card">
@@ -981,7 +994,7 @@ export function GamePage() {
               <p className="text-sm text-slate-300">Mot : {myResultAttempt?.answer_text ?? '—'}</p>
               <p className="text-sm">Points manche : <strong>{myResultAttempt?.points ?? 0}</strong></p>
             </div>
-            {!isSinglePlayerMode ? (
+            {isDuoMode ? (
               <div className="rounded-lg bg-slate-800 px-3 py-2">
                 <p className="font-semibold">Adversaire{opponent ? ` (${opponent.pseudo})` : ''}</p>
                 <p className="text-sm text-slate-300">Mot : {opponentResultAttempt?.answer_text ?? '—'}</p>
@@ -1197,7 +1210,7 @@ export function GamePage() {
         ) : null}
 
         {uiState === 'submitted' && !isSinglePlayerMode ? (
-          <p className="text-emerald-400 text-sm">Manche terminée. Attends l’autre joueur pour débloquer la suite.</p>
+          <p className="text-emerald-400 text-sm">Manche terminée. Attends les autres joueurs pour débloquer la suite.</p>
         ) : null}
       </section>
 
@@ -1205,10 +1218,28 @@ export function GamePage() {
         <h2 className="font-bold">Score</h2>
         {isSinglePlayerMode ? (
           <p>Score total : <strong>{myScore}</strong> pts</p>
-        ) : (
+        ) : isDuoMode ? (
           <>
             <p>Toi : <strong>{myScore}</strong> pts</p>
             <p>Adversaire : <strong>{opponent ? totalsByPlayer[opponent.id] ?? 0 : 0}</strong> pts</p>
+          </>
+        ) : (
+          <>
+            <p>Ton score : <strong>{myScore}</strong> pts</p>
+            <div className="mt-2">
+              <p className="text-sm font-semibold mb-1">Classement</p>
+              <ol className="text-sm space-y-1">
+                {players
+                  .map((player) => ({
+                    ...player,
+                    total: totalsByPlayer[player.id] ?? 0,
+                  }))
+                  .sort((a, b) => b.total - a.total)
+                  .map((player, index) => (
+                    <li key={player.id}>{index + 1}. {player.pseudo} — <strong>{player.total}</strong> pts</li>
+                  ))}
+              </ol>
+            </div>
           </>
         )}
       </section>
@@ -1239,7 +1270,7 @@ export function GamePage() {
                       <p className="text-slate-300">Ma réponse : <strong>{item.mine?.answer_text ?? '—'}</strong></p>
                       <p>Mes points : <strong>{item.mine?.points ?? 0}</strong></p>
 
-                      {!isSinglePlayerMode ? (
+                      {isDuoMode ? (
                         <>
                           <p className="text-slate-300">Réponse adverse : <strong>{item.opponentAttempt?.answer_text ?? '—'}</strong></p>
                           <p>Points adverses : <strong>{item.opponentAttempt?.points ?? 0}</strong></p>
@@ -1248,7 +1279,7 @@ export function GamePage() {
 
                       <div className="rounded-md border border-slate-700 px-2 py-2 text-xs text-slate-300">
                         <p>Score cumulé à cette manche — Toi : <strong>{item.cumulativeMine}</strong> pts</p>
-                        {!isSinglePlayerMode ? <p>Adversaire : <strong>{item.cumulativeOpponent}</strong> pts</p> : null}
+                        {isDuoMode ? <p>Adversaire : <strong>{item.cumulativeOpponent}</strong> pts</p> : null}
                       </div>
                     </div>
                   ) : null}
@@ -1273,6 +1304,8 @@ export function GamePage() {
           <p>gameId: {gameId}</p>
           <p>playerId: {profile.id}</p>
           <p>gameMode: {gameMode}</p>
+          <p>isDuoMode: {isDuoMode ? 'yes' : 'no'}</p>
+          <p>isMultiMode: {isMultiMode ? 'yes' : 'no'}</p>
           <p>opponentId: {opponent?.id ?? '—'}</p>
           <p>currentRoundId: {currentRoundId ?? 'none'}</p>
           <p>currentRoundType: {currentRoundType}</p>
