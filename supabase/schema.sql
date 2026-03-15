@@ -347,6 +347,7 @@ begin
     on conflict (game_id, round_index) do nothing;
   end loop;
 end;
+$$;
 
 create or replace function create_game_with_rounds(p_creator uuid)
 returns jsonb language plpgsql security definer as $$
