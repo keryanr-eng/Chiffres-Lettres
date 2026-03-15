@@ -712,13 +712,19 @@ export function GamePage() {
   }, [currentRoundId, isCurrentRoundResolved, previousRoundResolvedId, currentRoundAttemptCount, allGameAttempts, lastDismissedRecapRoundId]);
 
   const resultRound = recapRoundId ? rounds.find((r) => r.id === recapRoundId) : undefined;
-  const resultRoundAttempts = resultRound ? (attemptsByRoundId.get(resultRound.id) ?? []) : [];
-  const isRecapVisible = !!resultRound && isRoundResolved(resultRound.id) && recapRoundId !== lastDismissedRecapRoundId;
+  const recapRoundAttempts = useMemo(
+    () => (recapRoundId ? allGameAttempts.filter((attempt) => attempt.round_id === recapRoundId) : []),
+    [allGameAttempts, recapRoundId]
+  );
+  const recapRoundAttemptCount = recapRoundAttempts.length;
+  const recapPlayerIds = recapRoundAttempts.map((attempt) => attempt.player_id);
+  const isRecapResolved = !!recapRoundId && isRoundResolved(recapRoundId);
+  const isRecapVisible = !!resultRound && isRecapResolved && recapRoundId !== lastDismissedRecapRoundId;
   const canAdvanceToNextRound = isRecapVisible && hasNextRound;
 
   const opponent = players.find((player) => player.id !== (profile?.id ?? ''));
-  const myResultAttempt = resultRoundAttempts.find((attempt) => attempt.player_id === (profile?.id ?? ''));
-  const opponentResultAttempt = opponent ? resultRoundAttempts.find((attempt) => attempt.player_id === opponent.id) : undefined;
+  const myResultAttempt = recapRoundAttempts.find((attempt) => attempt.player_id === (profile?.id ?? ''));
+  const opponentResultAttempt = opponent ? recapRoundAttempts.find((attempt) => attempt.player_id === opponent.id) : undefined;
 
   const uiState: 'idle' | 'playing' | 'expired' | 'submitted' | 'resolved' | 'game_over' =
     gameStatus === 'finished'
@@ -1174,6 +1180,11 @@ export function GamePage() {
           <p>currentRoundId: {currentRoundId ?? 'none'}</p>
           <p>currentRoundType: {currentRoundType}</p>
           <p>recapRoundId: {recapRoundId ?? 'none'}</p>
+          <p>recapRoundIndex: {resultRound?.round_index ?? 'none'}</p>
+          <p>recapRoundAttemptCount: {recapRoundAttemptCount}</p>
+          <p>recapPlayerIds: {recapPlayerIds.length ? recapPlayerIds.join(', ') : 'none'}</p>
+          <p>recapMine: {myResultAttempt ? `${myResultAttempt.id} (${myResultAttempt.status})` : 'none'}</p>
+          <p>recapOpponent: {opponentResultAttempt ? `${opponentResultAttempt.id} (${opponentResultAttempt.status})` : 'none'}</p>
           <p>lastDismissedRecapRoundId: {lastDismissedRecapRoundId ?? 'none'}</p>
           <p>attempts total chargées: {allGameAttempts.length}</p>
           <p>attempts manche courante: {currentRoundAttempts.length}</p>
@@ -1199,6 +1210,14 @@ export function GamePage() {
           <p className="mt-2 font-semibold">auto-submit logs</p>
           <ul className="space-y-1">
             {autoSubmitLogs.length === 0 ? <li>—</li> : autoSubmitLogs.map((line, idx) => <li key={`${line}-${idx}`}>{line}</li>)}
+          </ul>
+          <p className="mt-2 font-semibold">recap attempts raw</p>
+          <ul className="space-y-1">
+            {recapRoundAttempts.length === 0 ? <li>—</li> : recapRoundAttempts.map((attempt) => (
+              <li key={`recap-${attempt.id}`}>
+                {attempt.player_id} · status={attempt.status} · ans={attempt.answer_text ?? '—'} · val={attempt.answer_value ?? '—'} · pts={attempt.points}
+              </li>
+            ))}
           </ul>
           <ul className="mt-2 space-y-1">
             {currentRoundAttempts.map((attempt) => (
