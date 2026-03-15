@@ -100,6 +100,7 @@ export function GamePage() {
   const [dailyScoreSubmitted, setDailyScoreSubmitted] = useState(false);
   const [dailyIsNewBest, setDailyIsNewBest] = useState(false);
   const [dailyChallengeDate, setDailyChallengeDate] = useState<string>('');
+  const [expandedHistoryRoundIds, setExpandedHistoryRoundIds] = useState<string[]>([]);
 
   const [letterTiles, setLetterTiles] = useState<LetterTile[]>([]);
   const [letterOrder, setLetterOrder] = useState<string[]>([]);
@@ -233,6 +234,7 @@ export function GamePage() {
     setDailyScoreSubmitted(false);
     setDailyIsNewBest(false);
     setDailyChallengeDate('');
+    setExpandedHistoryRoundIds([]);
     submittedSoloGameRef.current = null;
     previousSoloBestRef.current = null;
     submittedDailyGameRef.current = null;
@@ -726,6 +728,55 @@ export function GamePage() {
   const myResultAttempt = recapRoundAttempts.find((attempt) => attempt.player_id === (profile?.id ?? ''));
   const opponentResultAttempt = opponent ? recapRoundAttempts.find((attempt) => attempt.player_id === opponent.id) : undefined;
 
+
+  const completedHistoryRounds = useMemo(() => {
+    const sortedRounds = [...rounds].sort((a, b) => a.round_index - b.round_index);
+    const myPlayerId = profile?.id ?? '';
+
+    const cumulativeByPlayer: Record<string, number> = {};
+    const history: Array<{
+      round: RoundRow;
+      attempts: AttemptRow[];
+      mine?: AttemptRow;
+      opponentAttempt?: AttemptRow;
+      cumulativeMine: number;
+      cumulativeOpponent: number;
+    }> = [];
+
+    for (const itemRound of sortedRounds) {
+      const attemptsForRound = allGameAttempts.filter((attempt) => attempt.round_id === itemRound.id);
+      if (!isRoundResolved(itemRound.id)) {
+        continue;
+      }
+
+      for (const attempt of attemptsForRound) {
+        cumulativeByPlayer[attempt.player_id] = (cumulativeByPlayer[attempt.player_id] ?? 0) + (attempt.points ?? 0);
+      }
+
+      const mine = attemptsForRound.find((attempt) => attempt.player_id === myPlayerId);
+      const opponentAttempt = opponent ? attemptsForRound.find((attempt) => attempt.player_id === opponent.id) : undefined;
+
+      history.push({
+        round: itemRound,
+        attempts: attemptsForRound,
+        mine,
+        opponentAttempt,
+        cumulativeMine: cumulativeByPlayer[myPlayerId] ?? 0,
+        cumulativeOpponent: opponent ? (cumulativeByPlayer[opponent.id] ?? 0) : 0,
+      });
+    }
+
+    return history;
+  }, [rounds, allGameAttempts, opponent, profile?.id]);
+
+  const toggleHistoryRound = (roundId: string) => {
+    setExpandedHistoryRoundIds((prev) => (
+      prev.includes(roundId)
+        ? prev.filter((id) => id !== roundId)
+        : [...prev, roundId]
+    ));
+  };
+
   const uiState: 'idle' | 'playing' | 'expired' | 'submitted' | 'resolved' | 'game_over' =
     gameStatus === 'finished'
       ? 'game_over'
@@ -1159,6 +1210,52 @@ export function GamePage() {
             <p>Toi : <strong>{myScore}</strong> pts</p>
             <p>Adversaire : <strong>{opponent ? totalsByPlayer[opponent.id] ?? 0 : 0}</strong> pts</p>
           </>
+        )}
+      </section>
+
+
+      <section className="card">
+        <h2 className="font-bold">Historique des manches</h2>
+        {completedHistoryRounds.length === 0 ? (
+          <p className="text-sm text-slate-400 mt-2">Aucune manche terminée pour le moment.</p>
+        ) : (
+          <div className="mt-3 space-y-2">
+            {completedHistoryRounds.map((item) => {
+              const isOpen = expandedHistoryRoundIds.includes(item.round.id);
+              const roundLabel = `Manche ${item.round.round_index + 1} · ${item.round.round_type === 'numbers' ? 'Chiffres' : 'Lettres'}`;
+              return (
+                <div key={item.round.id} className="rounded-lg border border-slate-700 bg-slate-900/50">
+                  <button
+                    type="button"
+                    className="w-full flex items-center justify-between px-3 py-2 text-left"
+                    onClick={() => toggleHistoryRound(item.round.id)}
+                  >
+                    <span className="text-sm font-semibold">{roundLabel}</span>
+                    <span className="text-xs text-slate-400">{isOpen ? 'Masquer' : 'Voir'}</span>
+                  </button>
+
+                  {isOpen ? (
+                    <div className="border-t border-slate-700 px-3 py-3 space-y-2 text-sm">
+                      <p className="text-slate-300">Ma réponse : <strong>{item.mine?.answer_text ?? '—'}</strong></p>
+                      <p>Mes points : <strong>{item.mine?.points ?? 0}</strong></p>
+
+                      {!isSinglePlayerMode ? (
+                        <>
+                          <p className="text-slate-300">Réponse adverse : <strong>{item.opponentAttempt?.answer_text ?? '—'}</strong></p>
+                          <p>Points adverses : <strong>{item.opponentAttempt?.points ?? 0}</strong></p>
+                        </>
+                      ) : null}
+
+                      <div className="rounded-md border border-slate-700 px-2 py-2 text-xs text-slate-300">
+                        <p>Score cumulé à cette manche — Toi : <strong>{item.cumulativeMine}</strong> pts</p>
+                        {!isSinglePlayerMode ? <p>Adversaire : <strong>{item.cumulativeOpponent}</strong> pts</p> : null}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
         )}
       </section>
 
